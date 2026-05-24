@@ -83,7 +83,7 @@
   --primary-foreground: var(--color-blue-50);
   --sidebar-primary: var(--color-blue-500);
   --sidebar-primary-foreground: var(--color-blue-50);
-  --background: oklch(0.141 0.005 285.823);
+  --background: oklch(0.115 0.004 285.823);
   --foreground: oklch(0.85 0.005 65);
   --card: oklch(0.21 0.006 285.885);
   --card-foreground: oklch(0.85 0.005 65);
@@ -113,12 +113,31 @@
   --sidebar-ring: oklch(0.488 0.243 264.376);
 }
 
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+  }
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+  /* Editor surface: prevent pull-to-refresh and respect safe areas. */
+  .editor-surface {
+    overscroll-behavior: none;
+    touch-action: none;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
   }
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
