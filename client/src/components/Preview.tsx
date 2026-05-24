@@ -18,8 +18,9 @@ import { OUTPUT_SPECS } from '@/constants/instagram';
 import { cn } from '@/lib/utils';
 import { MotionEditor } from '@/components/MotionEditor';
 import { MAX_MOTION_ZOOM } from '@/lib/viewportFrame';
+import { configFromPreset, type PresetDefinition } from '@/constants/presets';
 import type { Clip } from '@/types/project';
-import type { KenBurnsConfig, Viewport } from '@/types/kenburns';
+import type { EasingConfig, KenBurnsConfig, Viewport } from '@/types/kenburns';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = MAX_MOTION_ZOOM;
@@ -44,8 +45,15 @@ function cloneConfig(config: KenBurnsConfig): KenBurnsConfig {
 }
 
 export function Preview() {
-  const { project, clips, layout, transitions, aspectRatio, updateClipKenBurns } =
-    useProject();
+  const {
+    project,
+    clips,
+    layout,
+    transitions,
+    aspectRatio,
+    updateClipKenBurns,
+    updateClipDuration,
+  } = useProject();
 
   const canvasAspect = useMemo(() => {
     const spec = OUTPUT_SPECS[aspectRatio];
@@ -251,8 +259,6 @@ export function Preview() {
     [editClip, clampForClip]
   );
 
-  const noopViewport = useCallback(() => {}, []);
-
   const commitMotion = useCallback(
     (keyframe: 'start' | 'end', vp: Viewport) => {
       if (!editClip) return;
@@ -266,6 +272,30 @@ export function Preview() {
     [editClip, updateClipKenBurns]
   );
 
+  const changeEasing = useCallback(
+    (easing: EasingConfig) => {
+      if (!editClip) return;
+      updateClipKenBurns(editClip.id, { ...editClip.kenburns, easing });
+    },
+    [editClip, updateClipKenBurns]
+  );
+
+  const applyMotionPreset = useCallback(
+    (preset: PresetDefinition) => {
+      if (!editClip) return;
+      updateClipKenBurns(editClip.id, configFromPreset(preset));
+    },
+    [editClip, updateClipKenBurns]
+  );
+
+  const changeDuration = useCallback(
+    (ms: number) => {
+      if (!editClip) return;
+      updateClipDuration(editClip.id, ms);
+    },
+    [editClip, updateClipDuration]
+  );
+
   if (motionKeyframe && editClip && editClip.imageUrl) {
     return (
       <div className="relative h-full w-full bg-neutral-950">
@@ -277,10 +307,14 @@ export function Preview() {
           startViewport={editClip.kenburns.startViewport}
           endViewport={editClip.kenburns.endViewport}
           activeKeyframe={motionKeyframe}
+          durationMs={editClip.duration}
+          easing={editClip.kenburns.easing}
           clampViewport={clampEdit}
           onKeyframeChange={setMotionKeyframe}
-          onViewportChange={noopViewport}
           onViewportCommit={commitMotion}
+          onDurationChange={changeDuration}
+          onEasingChange={changeEasing}
+          onApplyPreset={applyMotionPreset}
           onClose={() => setMotionKeyframe(null)}
         />
       </div>
