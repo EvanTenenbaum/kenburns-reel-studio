@@ -24,6 +24,13 @@ export const DEFAULT_EXPORT_CONFIG: ExportConfig = {
 /** Maximum working resolution for image processing (longest side in px) */
 export const MAX_WORKING_RESOLUTION = 2160;
 
+/**
+ * Maximum source resolution (longest side in px) decoded for video export.
+ * Sources are super-sampled relative to the 1080p output so that zoomed-in
+ * Ken Burns frames still sample enough detail to stay sharp instead of grainy.
+ */
+export const EXPORT_MAX_RESOLUTION = 4096;
+
 /** Maximum number of clips per project (can be reduced based on device memory) */
 export const MAX_CLIPS = 20;
 

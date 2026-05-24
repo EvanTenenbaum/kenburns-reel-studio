@@ -23,7 +23,7 @@ import { computeViewportAtTime, clampViewport, viewportToSourceRect } from '@/en
 import { renderTransitionFrame, type Ctx2D } from '@/engine/transitions';
 import { computeTimelineLayout, getClipAtTime } from '@/lib/timeline';
 import { decodeImageBitmap } from '@/lib/image';
-import { MAX_WORKING_RESOLUTION } from '@/constants/defaults';
+import { EXPORT_MAX_RESOLUTION } from '@/constants/defaults';
 import { QUALITY_BITRATES } from '@/types/export';
 import type { Clip } from '@/types/project';
 import type { AudioTrack } from '@/types/audio';
@@ -76,17 +76,50 @@ async function runExport(req: ExportRequest): Promise<void> {
     progress: progressOf('preparing', 0, totalFrames),
   });
 
-  // Decode every clip's bitmap once.
-  const bitmaps = new Map<string, ImageBitmap>();
-  for (const clip of req.clips) {
+  // Lazily decode clip bitmaps at a zoom-aware resolution, keeping only a few
+  // in memory at once. Sources are super-sampled relative to the output so that
+  // zoomed-in frames still sample enough detail to stay sharp (a fixed, low cap
+  // left zooms grainy), while the small LRU keeps peak memory bounded.
+  const canvasLong = Math.max(width, height);
+  const clipById = new Map(req.clips.map((c) => [c.id, c]));
+  const bitmapCache = new Map<string, ImageBitmap>();
+  const MAX_CACHED_BITMAPS = 3;
+
+  const decodeCapFor = (clip: Clip): number => {
+    const zoom = Math.max(
+      clip.kenburns.startViewport.zoom,
+      clip.kenburns.endViewport.zoom,
+      1
+    );
+    return Math.min(EXPORT_MAX_RESOLUTION, Math.ceil(canvasLong * zoom));
+  };
+
+  const ensureBitmap = async (clipId: string): Promise<void> => {
+    const cached = bitmapCache.get(clipId);
+    if (cached) {
+      // Re-insert to mark most-recently-used.
+      bitmapCache.delete(clipId);
+      bitmapCache.set(clipId, cached);
+      return;
+    }
+    const clip = clipById.get(clipId);
+    if (!clip) return;
     const blob = req.blobs[clip.imageBlobKey];
-    if (!blob) continue;
-    bitmaps.set(clip.id, await decodeImageBitmap(blob, MAX_WORKING_RESOLUTION));
-  }
+    if (!blob) return;
+    bitmapCache.set(clipId, await decodeImageBitmap(blob, decodeCapFor(clip)));
+    while (bitmapCache.size > MAX_CACHED_BITMAPS) {
+      const oldest = bitmapCache.keys().next().value as string;
+      bitmapCache.get(oldest)?.close();
+      bitmapCache.delete(oldest);
+    }
+  };
 
   const canvas = new OffscreenCanvas(width, height);
   const c2d = canvas.getContext('2d', { alpha: false }) as Ctx2D | null;
   if (!c2d) throw new Error('Could not acquire OffscreenCanvas 2D context');
+  // High-quality resampling when scaling the super-sampled source down to 1080p.
+  c2d.imageSmoothingEnabled = true;
+  c2d.imageSmoothingQuality = 'high';
 
   const output = new Output({
     format: new Mp4OutputFormat(),
@@ -124,7 +157,7 @@ async function runExport(req: ExportRequest): Promise<void> {
   const layout = computeTimelineLayout(req.clips, req.transitions);
 
   const drawClip = (clip: Clip, timeInClip: number) => {
-    const bitmap = bitmaps.get(clip.id);
+    const bitmap = bitmapCache.get(clip.id);
     if (!bitmap) return;
     const imgAspect = bitmap.height > 0 ? bitmap.width / bitmap.height : 1;
     const canvasAspect = width / height;
@@ -159,6 +192,8 @@ async function runExport(req: ExportRequest): Promise<void> {
         if (active.secondary && active.transition) {
           const fromClip = active.primary.clip;
           const toClip = active.secondary.clip;
+          await ensureBitmap(fromClip.id);
+          await ensureBitmap(toClip.id);
           renderTransitionFrame(
             c2d,
             active.transition.type,
@@ -169,6 +204,7 @@ async function runExport(req: ExportRequest): Promise<void> {
             height
           );
         } else {
+          await ensureBitmap(active.primary.clip.id);
           drawClip(active.primary.clip, active.timeInPrimary);
         }
       }
@@ -200,7 +236,7 @@ async function runExport(req: ExportRequest): Promise<void> {
     post({ type: 'progress', progress: progressOf('complete', totalFrames, totalFrames) });
     post({ type: 'done', buffer, mimeType: 'video/mp4' }, [buffer]);
   } finally {
-    Array.from(bitmaps.values()).forEach((bitmap) => bitmap.close());
+    Array.from(bitmapCache.values()).forEach((bitmap) => bitmap.close());
   }
 }
 

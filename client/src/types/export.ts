@@ -40,9 +40,9 @@ export interface ExportProgress {
 
 export type ExportStrategy = 'mediabunny' | 'ffmpeg-st' | 'unsupported';
 
-/** Quality presets mapping to video bitrates */
+/** Quality presets mapping to video bitrates (H.264, 1080×1920 @ 30fps) */
 export const QUALITY_BITRATES: Record<ExportQuality, number> = {
-  draft: 3_000_000,     // 3 Mbps (720p-ish quality)
-  standard: 6_000_000,  // 6 Mbps (good 1080p)
-  high: 10_000_000,     // 10 Mbps (high quality 1080p)
+  draft: 5_000_000,     // 5 Mbps (fast, smaller files)
+  standard: 10_000_000, // 10 Mbps (crisp 1080p)
+  high: 16_000_000,     // 16 Mbps (near-source 1080p, best for IG re-encode)
 };
