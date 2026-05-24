@@ -1,304 +1,278 @@
+/**
+ * Project state (undoable via zundo) and ephemeral UI state (NOT undoable).
+ *
+ * Layer rule: store may import types/, engine/, lib/, constants/ — never React
+ * components or DOM. All project mutations go through actions here so they are
+ * tracked by the temporal (undo/redo) middleware.
+ */
+
 import { create } from 'zustand';
-import { toast } from 'sonner';
-import { DEFAULT_AUDIO_FADE_MS, DEFAULT_AUDIO_VOLUME, DEFAULT_CANVAS_CONFIG } from '@/constants/defaults';
-import { DEFAULT_CLIP_DURATION_MS, DEFAULT_TRANSITION_DURATION_MS } from '@/constants/instagram';
-import { configFromPreset, getRandomPreset, MOTION_PRESETS } from '@/constants/presets';
+import { temporal } from 'zundo';
+import { nanoid } from 'nanoid';
+
+import type { Project, Clip, Transition, AspectRatio, CanvasConfig } from '@/types/project';
 import type { AudioTrack } from '@/types/audio';
-import type { KenBurnsConfig, MotionPreset } from '@/types/kenburns';
-import type { Clip, Project, Transition, TransitionType } from '@/types/project';
-import { materializeProject, saveBlob, saveProject } from './db';
+import type { KenBurnsConfig } from '@/types/kenburns';
+import { computeTimelineLayout } from '@/lib/timeline';
+import { OUTPUT_SPECS, DEFAULT_FPS } from '@/constants/instagram';
 
-type PanelName = 'clip' | 'transition' | 'audio' | 'export' | null;
-
-interface UIState {
-  playhead: number;
-  selectedClipId: string | null;
-  selectedTransitionId: string | null;
-  activePanel: PanelName;
-  timelineZoom: number;
-  isPlaying: boolean;
-}
-
-interface ProjectState {
+export interface ProjectState {
   project: Project | null;
-  ui: UIState;
-  past: Project[];
-  future: Project[];
-  createProject: (name?: string) => Project;
-  loadProject: (project: Project) => Promise<void>;
-  addClipFromFile: (file: File) => Promise<void>;
+
+  createProject: (name: string, aspectRatio?: AspectRatio) => Project;
+  /** Replace the active project (used when loading from IndexedDB). */
+  setProject: (project: Project | null) => void;
+  setName: (name: string) => void;
+  setAspectRatio: (aspectRatio: AspectRatio) => void;
+
+  addClip: (clip: Clip) => void;
   removeClip: (clipId: string) => void;
-  reorderClips: (fromIndex: number, toIndex: number) => void;
-  updateClipDuration: (clipId: string, duration: number) => void;
+  reorderClips: (orderedIds: string[]) => void;
   updateClipKenBurns: (clipId: string, kenburns: KenBurnsConfig) => void;
-  applyPreset: (clipId: string, preset: MotionPreset) => void;
-  addTransition: (fromClipId: string, toClipId: string, type?: TransitionType) => void;
-  updateTransition: (transitionId: string, patch: Partial<Pick<Transition, 'type' | 'duration'>>) => void;
-  addAudioTrackFromFile: (file: File) => Promise<void>;
+  updateClipDuration: (clipId: string, durationMs: number) => void;
+
+  addTransition: (transition: Transition) => void;
+  updateTransition: (transitionId: string, patch: Partial<Omit<Transition, 'id'>>) => void;
+  removeTransition: (transitionId: string) => void;
+
+  addAudioTrack: (track: AudioTrack) => void;
   removeAudioTrack: (trackId: string) => void;
-  updateAudioTrack: (trackId: string, patch: Partial<AudioTrack>) => void;
-  seek: (time: number) => void;
-  setSelectedClip: (clipId: string | null) => void;
-  setSelectedTransition: (transitionId: string | null) => void;
-  setPanel: (panel: PanelName) => void;
-  setPlaying: (playing: boolean) => void;
-  setTimelineZoom: (zoom: number) => void;
-  undo: () => void;
-  redo: () => void;
-  persistNow: () => Promise<void>;
+  updateAudioTrack: (trackId: string, patch: Partial<Omit<AudioTrack, 'id'>>) => void;
 }
 
-const emptyUI: UIState = {
-  playhead: 0,
-  selectedClipId: null,
-  selectedTransitionId: null,
-  activePanel: null,
-  timelineZoom: 1,
-  isPlaying: false,
-};
-
-let saveTimer: ReturnType<typeof setTimeout> | undefined;
-
-function id(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID()}`;
-}
-
-function clone(project: Project): Project {
-  return structuredClone(project);
-}
-
-function recomputeTimeline(project: Project): Project {
-  let cursor = 0;
-  const clips = project.clips
-    .slice()
-    .sort((a, b) => a.order - b.order)
-    .map((clip, index) => {
-      const next = { ...clip, order: index, startTime: cursor };
-      const transition = project.transitions.find((item) => item.fromClipId === clip.id);
-      cursor += clip.duration - (transition?.duration ?? 0);
-      return next;
-    });
-
-  const validIds = new Set(clips.map((clip) => clip.id));
-  const transitions = project.transitions.filter((transition) => (
-    validIds.has(transition.fromClipId) && validIds.has(transition.toClipId)
-  ));
-
-  return { ...project, clips, transitions, updatedAt: Date.now() };
-}
-
-function createDefaultProject(name = 'Untitled Reel'): Project {
-  const now = Date.now();
+function canvasFromAspect(aspectRatio: AspectRatio): CanvasConfig {
+  const spec = OUTPUT_SPECS[aspectRatio];
   return {
-    id: id('project'),
-    name,
-    createdAt: now,
-    updatedAt: now,
-    canvas: DEFAULT_CANVAS_CONFIG,
-    clips: [],
-    audioTracks: [],
-    transitions: [],
+    width: spec.width,
+    height: spec.height,
+    fps: DEFAULT_FPS,
+    aspectRatio,
   };
 }
 
-function withHistory(set: (partial: Partial<ProjectState> | ((state: ProjectState) => Partial<ProjectState>)) => void, mutate: (project: Project) => Project): void {
-  set((state) => {
-    if (!state.project) return {};
-    const next = recomputeTimeline(mutate(clone(state.project)));
-    scheduleSave(next);
-    return { project: next, past: [...state.past, clone(state.project)].slice(-40), future: [] };
-  });
+/** Re-index clip order, prune dangling transitions, recompute start times. */
+function normalize(project: Project): Project {
+  const clips = [...project.clips]
+    .sort((a, b) => a.order - b.order)
+    .map((c, i) => ({ ...c, order: i }));
+
+  const adjacent = new Set<string>();
+  for (let i = 0; i < clips.length - 1; i++) {
+    adjacent.add(`${clips[i].id}>${clips[i + 1].id}`);
+  }
+  const transitions = project.transitions.filter((t) =>
+    adjacent.has(`${t.fromClipId}>${t.toClipId}`)
+  );
+
+  const layout = computeTimelineLayout(clips, transitions);
+  const startById = new Map(layout.map((l) => [l.clip.id, l.startTime]));
+  const withTimes = clips.map((c) => ({ ...c, startTime: startById.get(c.id) ?? 0 }));
+
+  return { ...project, clips: withTimes, transitions, updatedAt: Date.now() };
 }
 
-function scheduleSave(project: Project): void {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    void saveProject(project).catch((error: unknown) => {
-      console.error(error);
-      toast.error('Autosave failed');
-    });
-  }, 600);
+export const useProjectStore = create<ProjectState>()(
+  temporal(
+    (set, get) => {
+      const mutate = (fn: (project: Project) => Project) => {
+        const current = get().project;
+        if (!current) return;
+        set({ project: normalize(fn(current)) });
+      };
+
+      return {
+        project: null,
+
+        createProject: (name, aspectRatio = '9:16') => {
+          const now = Date.now();
+          const project: Project = {
+            id: nanoid(),
+            name: name.trim() || 'Untitled Reel',
+            createdAt: now,
+            updatedAt: now,
+            canvas: canvasFromAspect(aspectRatio),
+            clips: [],
+            audioTracks: [],
+            transitions: [],
+          };
+          set({ project });
+          return project;
+        },
+
+        setProject: (project) => set({ project }),
+
+        setName: (name) => mutate((p) => ({ ...p, name })),
+
+        setAspectRatio: (aspectRatio) =>
+          mutate((p) => ({ ...p, canvas: canvasFromAspect(aspectRatio) })),
+
+        addClip: (clip) =>
+          mutate((p) => ({
+            ...p,
+            clips: [...p.clips, { ...clip, order: p.clips.length }],
+          })),
+
+        removeClip: (clipId) =>
+          mutate((p) => ({
+            ...p,
+            clips: p.clips.filter((c) => c.id !== clipId),
+            transitions: p.transitions.filter(
+              (t) => t.fromClipId !== clipId && t.toClipId !== clipId
+            ),
+          })),
+
+        reorderClips: (orderedIds) =>
+          mutate((p) => {
+            const rank = new Map(orderedIds.map((id, i) => [id, i]));
+            return {
+              ...p,
+              clips: p.clips.map((c) => ({
+                ...c,
+                order: rank.get(c.id) ?? c.order,
+              })),
+            };
+          }),
+
+        updateClipKenBurns: (clipId, kenburns) =>
+          mutate((p) => ({
+            ...p,
+            clips: p.clips.map((c) => (c.id === clipId ? { ...c, kenburns } : c)),
+          })),
+
+        updateClipDuration: (clipId, durationMs) =>
+          mutate((p) => ({
+            ...p,
+            clips: p.clips.map((c) =>
+              c.id === clipId ? { ...c, duration: durationMs } : c
+            ),
+          })),
+
+        addTransition: (transition) =>
+          mutate((p) => ({
+            ...p,
+            transitions: [
+              ...p.transitions.filter(
+                (t) =>
+                  !(
+                    t.fromClipId === transition.fromClipId &&
+                    t.toClipId === transition.toClipId
+                  )
+              ),
+              transition,
+            ],
+          })),
+
+        updateTransition: (transitionId, patch) =>
+          mutate((p) => ({
+            ...p,
+            transitions: p.transitions.map((t) =>
+              t.id === transitionId ? { ...t, ...patch } : t
+            ),
+          })),
+
+        removeTransition: (transitionId) =>
+          mutate((p) => ({
+            ...p,
+            transitions: p.transitions.filter((t) => t.id !== transitionId),
+          })),
+
+        addAudioTrack: (track) =>
+          mutate((p) => ({ ...p, audioTracks: [...p.audioTracks, track] })),
+
+        removeAudioTrack: (trackId) =>
+          mutate((p) => ({
+            ...p,
+            audioTracks: p.audioTracks.filter((a) => a.id !== trackId),
+          })),
+
+        updateAudioTrack: (trackId, patch) =>
+          mutate((p) => ({
+            ...p,
+            audioTracks: p.audioTracks.map((a) =>
+              a.id === trackId ? { ...a, ...patch } : a
+            ),
+          })),
+      };
+    },
+    {
+      partialize: (state) => ({ project: state.project }),
+      limit: 100,
+      equality: (a, b) => a.project === b.project,
+    }
+  )
+);
+
+// ─── Ephemeral UI state (NOT tracked by undo/redo) ──────────────────────────
+
+export type PanelKind = 'none' | 'clip' | 'transition' | 'audio' | 'export';
+
+/** The adjacent clip pair a transition is being edited for. */
+export interface TransitionContext {
+  fromClipId: string;
+  toClipId: string;
 }
 
-function imageDimensions(url: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    image.onerror = () => reject(new Error('Could not read image dimensions'));
-    image.src = url;
-  });
+/** Which keyframe the on-image motion editor is currently editing. */
+export type MotionKeyframe = 'start' | 'end';
+
+export interface UIState {
+  /** Playhead position on the timeline in ms */
+  playhead: number;
+  isPlaying: boolean;
+  selectedClipId: string | null;
+  selectedTransitionId: string | null;
+  /** Which adjacent clip pair the transition picker targets */
+  transitionContext: TransitionContext | null;
+  /** Active keyframe in the on-image motion editor, or null when not editing */
+  motionKeyframe: MotionKeyframe | null;
+  /** Timeline scale in pixels per second */
+  pixelsPerSecond: number;
+  openPanel: PanelKind;
+
+  setPlayhead: (ms: number) => void;
+  setIsPlaying: (playing: boolean) => void;
+  selectClip: (clipId: string | null) => void;
+  selectTransition: (transitionId: string | null) => void;
+  setTransitionContext: (context: TransitionContext | null) => void;
+  setMotionKeyframe: (keyframe: MotionKeyframe | null) => void;
+  setPixelsPerSecond: (value: number) => void;
+  openPanelKind: (panel: PanelKind) => void;
+  closePanel: () => void;
+  resetUI: () => void;
 }
 
-async function thumbnailFor(url: string): Promise<string> {
-  const image = new Image();
-  image.src = url;
-  await image.decode();
-  const canvas = document.createElement('canvas');
-  canvas.width = 150;
-  canvas.height = 150;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return url;
-  const scale = Math.max(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
-  const width = image.naturalWidth * scale;
-  const height = image.naturalHeight * scale;
-  ctx.drawImage(image, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
-  return canvas.toDataURL('image/jpeg', 0.72);
-}
+export const DEFAULT_PIXELS_PER_SECOND = 60;
 
-export function totalDuration(project: Project | null): number {
-  if (!project || project.clips.length === 0) return 0;
-  return Math.max(...project.clips.map((clip) => clip.startTime + clip.duration));
-}
+export const useUIStore = create<UIState>((set) => ({
+  playhead: 0,
+  isPlaying: false,
+  selectedClipId: null,
+  selectedTransitionId: null,
+  transitionContext: null,
+  motionKeyframe: null,
+  pixelsPerSecond: DEFAULT_PIXELS_PER_SECOND,
+  openPanel: 'none',
 
-export const useProjectStore = create<ProjectState>((set, get) => ({
-  project: null,
-  ui: emptyUI,
-  past: [],
-  future: [],
-
-  createProject: (name) => {
-    const project = createDefaultProject(name);
-    set({ project, ui: emptyUI, past: [], future: [] });
-    scheduleSave(project);
-    return project;
-  },
-
-  loadProject: async (project) => {
-    const hydrated = await materializeProject(project);
-    set({ project: recomputeTimeline(hydrated), ui: emptyUI, past: [], future: [] });
-  },
-
-  addClipFromFile: async (file) => {
-    const project = get().project ?? get().createProject('Mobile Reel');
-    const blobId = id('image');
-    const imageUrl = URL.createObjectURL(file);
-    const dims = await imageDimensions(imageUrl);
-    const thumbnail = await thumbnailFor(imageUrl);
-    await saveBlob({ id: blobId, projectId: project.id, kind: 'image', name: file.name, type: file.type, blob: file });
-    const preset = getRandomPreset();
-    const clip: Clip = {
-      id: id('clip'),
-      imageUrl,
-      imageBlobKey: blobId,
-      startTime: 0,
-      duration: DEFAULT_CLIP_DURATION_MS,
-      kenburns: configFromPreset(preset),
-      order: project.clips.length,
-      thumbnail,
-      naturalWidth: dims.width,
-      naturalHeight: dims.height,
-    };
-    withHistory(set, (draft) => ({ ...draft, clips: [...draft.clips, clip] }));
-    set((state) => ({ ui: { ...state.ui, selectedClipId: clip.id, activePanel: null } }));
-    toast.success(`Imported ${file.name}`);
-  },
-
-  removeClip: (clipId) => withHistory(set, (project) => ({
-    ...project,
-    clips: project.clips.filter((clip) => clip.id !== clipId),
-    transitions: project.transitions.filter((transition) => transition.fromClipId !== clipId && transition.toClipId !== clipId),
-  })),
-
-  reorderClips: (fromIndex, toIndex) => withHistory(set, (project) => {
-    const clips = project.clips.slice().sort((a, b) => a.order - b.order);
-    const [moved] = clips.splice(fromIndex, 1);
-    if (!moved) return project;
-    clips.splice(toIndex, 0, moved);
-    return { ...project, clips: clips.map((clip, order) => ({ ...clip, order })) };
-  }),
-
-  updateClipDuration: (clipId, duration) => withHistory(set, (project) => ({
-    ...project,
-    clips: project.clips.map((clip) => clip.id === clipId ? { ...clip, duration } : clip),
-  })),
-
-  updateClipKenBurns: (clipId, kenburns) => withHistory(set, (project) => ({
-    ...project,
-    clips: project.clips.map((clip) => clip.id === clipId ? { ...clip, kenburns } : clip),
-  })),
-
-  applyPreset: (clipId, preset) => {
-    const knownPreset = MOTION_PRESETS.some((item) => item.id === preset) ? preset : 'zoom-in-center';
-    const definition = MOTION_PRESETS.find((item) => item.id === knownPreset) ?? MOTION_PRESETS[0];
-    get().updateClipKenBurns(clipId, configFromPreset(definition));
-  },
-
-  addTransition: (fromClipId, toClipId, type = 'crossfade') => withHistory(set, (project) => ({
-    ...project,
-    transitions: [
-      ...project.transitions.filter((transition) => transition.fromClipId !== fromClipId),
-      { id: id('transition'), fromClipId, toClipId, type, duration: DEFAULT_TRANSITION_DURATION_MS },
-    ],
-  })),
-
-  updateTransition: (transitionId, patch) => withHistory(set, (project) => ({
-    ...project,
-    transitions: project.transitions.map((transition) => transition.id === transitionId ? { ...transition, ...patch } : transition),
-  })),
-
-  addAudioTrackFromFile: async (file) => {
-    const project = get().project ?? get().createProject('Mobile Reel');
-    const blobKey = id('audio');
-    const url = URL.createObjectURL(file);
-    await saveBlob({ id: blobKey, projectId: project.id, kind: 'audio', name: file.name, type: file.type, blob: file });
-    const audio = document.createElement('audio');
-    audio.src = url;
-    await new Promise<void>((resolve) => {
-      audio.onloadedmetadata = () => resolve();
-      audio.onerror = () => resolve();
-    });
-    const duration = Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : totalDuration(project);
-    const track: AudioTrack = {
-      id: id('audioTrack'),
-      name: file.name,
-      blobKey,
-      url,
-      startTime: 0,
-      duration: Math.max(duration, 1000),
-      volume: DEFAULT_AUDIO_VOLUME,
-      fadeIn: DEFAULT_AUDIO_FADE_MS,
-      fadeOut: DEFAULT_AUDIO_FADE_MS,
-      trimStart: 0,
-      trimEnd: Math.max(duration, 1000),
-      muted: false,
-    };
-    withHistory(set, (draft) => ({ ...draft, audioTracks: [...draft.audioTracks, track] }));
-    toast.success(`Added music: ${file.name}`);
-  },
-
-  removeAudioTrack: (trackId) => withHistory(set, (project) => ({
-    ...project,
-    audioTracks: project.audioTracks.filter((track) => track.id !== trackId),
-  })),
-
-  updateAudioTrack: (trackId, patch) => withHistory(set, (project) => ({
-    ...project,
-    audioTracks: project.audioTracks.map((track) => track.id === trackId ? { ...track, ...patch } : track),
-  })),
-
-  seek: (time) => set((state) => ({ ui: { ...state.ui, playhead: Math.max(0, Math.min(time, totalDuration(state.project))) } })),
-  setSelectedClip: (clipId) => set((state) => ({ ui: { ...state.ui, selectedClipId: clipId, selectedTransitionId: null } })),
-  setSelectedTransition: (transitionId) => set((state) => ({ ui: { ...state.ui, selectedTransitionId: transitionId, selectedClipId: null } })),
-  setPanel: (panel) => set((state) => ({ ui: { ...state.ui, activePanel: panel } })),
-  setPlaying: (playing) => set((state) => ({ ui: { ...state.ui, isPlaying: playing } })),
-  setTimelineZoom: (zoom) => set((state) => ({ ui: { ...state.ui, timelineZoom: Math.max(0.5, Math.min(4, zoom)) } })),
-
-  undo: () => set((state) => {
-    const previous = state.past.at(-1);
-    if (!previous || !state.project) return {};
-    scheduleSave(previous);
-    return { project: previous, past: state.past.slice(0, -1), future: [clone(state.project), ...state.future].slice(0, 40) };
-  }),
-
-  redo: () => set((state) => {
-    const [next, ...future] = state.future;
-    if (!next || !state.project) return {};
-    scheduleSave(next);
-    return { project: next, past: [...state.past, clone(state.project)].slice(-40), future };
-  }),
-
-  persistNow: async () => {
-    const project = get().project;
-    if (project) await saveProject(project);
-  },
+  setPlayhead: (ms) => set({ playhead: Math.max(0, ms) }),
+  setIsPlaying: (isPlaying) => set({ isPlaying }),
+  selectClip: (selectedClipId) =>
+    set({ selectedClipId, selectedTransitionId: null }),
+  selectTransition: (selectedTransitionId) =>
+    set({ selectedTransitionId, selectedClipId: null }),
+  setTransitionContext: (transitionContext) => set({ transitionContext }),
+  setMotionKeyframe: (motionKeyframe) => set({ motionKeyframe }),
+  setPixelsPerSecond: (pixelsPerSecond) =>
+    set({ pixelsPerSecond: Math.min(Math.max(pixelsPerSecond, 10), 400) }),
+  openPanelKind: (openPanel) => set({ openPanel }),
+  closePanel: () => set({ openPanel: 'none' }),
+  resetUI: () =>
+    set({
+      playhead: 0,
+      isPlaying: false,
+      selectedClipId: null,
+      selectedTransitionId: null,
+      transitionContext: null,
+      motionKeyframe: null,
+      openPanel: 'none',
+    }),
 }));

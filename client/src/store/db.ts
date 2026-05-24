@@ -1,88 +1,82 @@
+/**
+ * IndexedDB persistence via Dexie.
+ *
+ * Two tables:
+ *  - `projects`: serializable project metadata + structure (no runtime URLs)
+ *  - `blobs`: binary image / audio data keyed by an opaque string
+ *
+ * Runtime-only fields (`Clip.imageUrl`, `AudioTrack.url`) are stripped before
+ * writing and re-hydrated on load by the caller.
+ */
+
 import Dexie, { type Table } from 'dexie';
 import type { Project } from '@/types/project';
 
-interface StoredProject {
-  id: string;
-  name: string;
-  updatedAt: number;
-  thumbnail?: string;
-  data: Project;
-}
-
-interface StoredBlob {
-  id: string;
-  projectId: string;
-  kind: 'image' | 'audio' | 'export';
-  name: string;
-  type: string;
+export interface BlobRecord {
+  key: string;
   blob: Blob;
-  createdAt: number;
 }
 
-class KenBurnsDB extends Dexie {
-  projects!: Table<StoredProject, string>;
-  blobs!: Table<StoredBlob, string>;
+class StudioDatabase extends Dexie {
+  projects!: Table<Project, string>;
+  blobs!: Table<BlobRecord, string>;
 
   constructor() {
     super('kenburns-reel-studio');
     this.version(1).stores({
-      projects: 'id, updatedAt, name',
-      blobs: 'id, projectId, kind, createdAt',
+      projects: 'id, updatedAt',
+      blobs: 'key',
     });
   }
 }
 
-export const db = new KenBurnsDB();
+export const db = new StudioDatabase();
+
+/** Remove runtime-only blob URLs so persisted data stays valid across reloads. */
+function stripRuntime(project: Project): Project {
+  return {
+    ...project,
+    clips: project.clips.map((c) => ({ ...c, imageUrl: '' })),
+    audioTracks: project.audioTracks.map((a) => ({ ...a, url: '' })),
+  };
+}
 
 export async function saveProject(project: Project): Promise<void> {
-  await db.projects.put({
-    id: project.id,
-    name: project.name,
-    updatedAt: project.updatedAt,
-    thumbnail: project.clips[0]?.thumbnail,
-    data: project,
-  });
+  await db.projects.put(stripRuntime(project));
 }
 
 export async function loadProject(id: string): Promise<Project | undefined> {
-  const row = await db.projects.get(id);
-  return row?.data;
+  return db.projects.get(id);
 }
 
-export async function listProjects(): Promise<Array<Pick<StoredProject, 'id' | 'name' | 'updatedAt' | 'thumbnail'>>> {
-  const rows = await db.projects.orderBy('updatedAt').reverse().toArray();
-  return rows.map(({ id, name, updatedAt, thumbnail }) => ({ id, name, updatedAt, thumbnail }));
+export async function listProjects(): Promise<Project[]> {
+  const all = await db.projects.toArray();
+  return all.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export async function deleteProject(id: string): Promise<void> {
+  const project = await db.projects.get(id);
   await db.transaction('rw', db.projects, db.blobs, async () => {
+    if (project) {
+      const keys = [
+        ...project.clips.map((c) => c.imageBlobKey),
+        ...project.audioTracks.map((a) => a.blobKey),
+      ].filter(Boolean);
+      await Promise.all(keys.map((k) => db.blobs.delete(k)));
+    }
     await db.projects.delete(id);
-    const blobIds = await db.blobs.where('projectId').equals(id).primaryKeys();
-    await db.blobs.bulkDelete(blobIds as string[]);
   });
 }
 
-export async function saveBlob(input: Omit<StoredBlob, 'createdAt'>): Promise<string> {
-  await db.blobs.put({ ...input, createdAt: Date.now() });
-  return input.id;
+export async function saveBlob(key: string, blob: Blob): Promise<void> {
+  await db.blobs.put({ key, blob });
 }
 
-export async function loadBlob(id: string): Promise<Blob | undefined> {
-  return (await db.blobs.get(id))?.blob;
+export async function loadBlob(key: string): Promise<Blob | undefined> {
+  const record = await db.blobs.get(key);
+  return record?.blob;
 }
 
-export async function materializeProject(project: Project): Promise<Project> {
-  const clips = await Promise.all(project.clips.map(async (clip) => {
-    if (clip.imageUrl.startsWith('blob:') || !clip.imageBlobKey) return clip;
-    const blob = await loadBlob(clip.imageBlobKey);
-    return blob ? { ...clip, imageUrl: URL.createObjectURL(blob) } : clip;
-  }));
-
-  const audioTracks = await Promise.all(project.audioTracks.map(async (track) => {
-    if (track.url.startsWith('blob:') || !track.blobKey) return track;
-    const blob = await loadBlob(track.blobKey);
-    return blob ? { ...track, url: URL.createObjectURL(blob) } : track;
-  }));
-
-  return { ...project, clips, audioTracks };
+export async function deleteBlob(key: string): Promise<void> {
+  await db.blobs.delete(key);
 }
