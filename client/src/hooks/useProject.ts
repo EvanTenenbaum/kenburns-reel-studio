@@ -145,7 +145,9 @@ export function useProject() {
           added += 1;
         } catch (err) {
           console.error('Failed to import image', file.name, err);
-          toast.error(`Could not import ${file.name}`);
+          const detail =
+            err instanceof Error && err.message ? ` — ${err.message}` : '';
+          toast.error(`Could not import ${file.name}${detail}`);
         }
       }
 
