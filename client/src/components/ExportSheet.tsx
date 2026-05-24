@@ -45,7 +45,7 @@ export function ExportSheet() {
   const { progress, resultUrl, canExport, isExporting, start, cancel, reset } =
     useExport();
 
-  const [quality, setQuality] = useState<Quality>('standard');
+  const [quality, setQuality] = useState<Quality>('high');
   const [includeAudio, setIncludeAudio] = useState(true);
 
   const canShare =
