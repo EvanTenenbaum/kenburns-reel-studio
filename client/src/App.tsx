@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
-import { Route, Switch } from "wouter";
+import { Redirect, Route, Switch } from "wouter";
 
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -23,6 +23,10 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
+      {/* A bare /editor has no project to open — send people home to pick one. */}
+      <Route path="/editor">
+        <Redirect to="/" />
+      </Route>
       <Route path="/editor/:id">
         <Suspense fallback={<PageLoader />}>
           <Editor />
