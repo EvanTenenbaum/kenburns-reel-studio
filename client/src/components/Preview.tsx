@@ -61,21 +61,27 @@ export function Preview() {
   const setMotionKeyframe = useUIStore((s) => s.setMotionKeyframe);
 
   // ── Stage measurement ─────────────────────────────────────────────────────
-  const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const [container, setContainer] = useState({ w: 0, h: 0 });
 
-  useEffect(() => {
-    const node = containerRef.current;
+  // A callback ref (re)attaches the ResizeObserver every time the node mounts.
+  // The motion editor is rendered via an early return that unmounts this
+  // subtree, so a one-time effect would keep observing the stale, detached node
+  // and report a 0×0 size on return — collapsing the Ken Burns transform to
+  // `none` until a full reload.
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
     if (!node) return;
-    const update = () => {
+    const measure = () => {
       const rect = node.getBoundingClientRect();
       setContainer({ w: rect.width, h: rect.height });
     };
-    update();
-    const observer = new ResizeObserver(update);
+    measure();
+    const observer = new ResizeObserver(measure);
     observer.observe(node);
-    return () => observer.disconnect();
+    observerRef.current = observer;
   }, []);
 
   // Letterbox: fit a canvasAspect-shaped box inside the measured container.
@@ -284,7 +290,7 @@ export function Preview() {
   return (
     <div className="flex h-full w-full items-center justify-center bg-neutral-950 p-3">
       <div
-        ref={containerRef}
+        ref={setContainerRef}
         className="flex h-full w-full items-center justify-center overflow-hidden"
       >
         <div
