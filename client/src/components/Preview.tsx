@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useGesture } from '@use-gesture/react';
 import { ImageIcon } from 'lucide-react';
 
@@ -297,27 +298,26 @@ export function Preview() {
   );
 
   if (motionKeyframe && editClip && editClip.imageUrl) {
-    return (
-      <div className="relative h-full w-full bg-neutral-950">
-        <MotionEditor
-          imageUrl={editClip.imageUrl}
-          naturalWidth={editClip.naturalWidth}
-          naturalHeight={editClip.naturalHeight}
-          canvasAspect={canvasAspect}
-          startViewport={editClip.kenburns.startViewport}
-          endViewport={editClip.kenburns.endViewport}
-          activeKeyframe={motionKeyframe}
-          durationMs={editClip.duration}
-          easing={editClip.kenburns.easing}
-          clampViewport={clampEdit}
-          onKeyframeChange={setMotionKeyframe}
-          onViewportCommit={commitMotion}
-          onDurationChange={changeDuration}
-          onEasingChange={changeEasing}
-          onApplyPreset={applyMotionPreset}
-          onClose={() => setMotionKeyframe(null)}
-        />
-      </div>
+    return createPortal(
+      <MotionEditor
+        imageUrl={editClip.imageUrl}
+        naturalWidth={editClip.naturalWidth}
+        naturalHeight={editClip.naturalHeight}
+        canvasAspect={canvasAspect}
+        startViewport={editClip.kenburns.startViewport}
+        endViewport={editClip.kenburns.endViewport}
+        activeKeyframe={motionKeyframe}
+        durationMs={editClip.duration}
+        easing={editClip.kenburns.easing}
+        clampViewport={clampEdit}
+        onKeyframeChange={setMotionKeyframe}
+        onViewportCommit={commitMotion}
+        onDurationChange={changeDuration}
+        onEasingChange={changeEasing}
+        onApplyPreset={applyMotionPreset}
+        onClose={() => setMotionKeyframe(null)}
+      />,
+      document.body
     );
   }
 
