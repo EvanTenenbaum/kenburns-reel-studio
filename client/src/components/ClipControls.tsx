@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Move, Trash2 } from 'lucide-react';
 
 import { useProject } from '@/hooks/useProject';
 import { useUIStore } from '@/store/projectStore';
@@ -18,7 +18,6 @@ import {
 } from '@/components/ui/drawer';
 import { Slider } from '@/components/ui/slider';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectTrigger,
@@ -27,7 +26,6 @@ import {
   SelectItem,
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 const EASING_OPTIONS: { value: EasingPreset; label: string }[] = [
@@ -52,7 +50,6 @@ export function ClipControls() {
   const [durationLabel, setDurationLabel] = useState<number>(
     clip?.duration ?? MIN_CLIP_DURATION_MS
   );
-  const [adjustFraming, setAdjustFraming] = useState(false);
 
   useEffect(() => {
     if (clip) setDurationLabel(clip.duration);
@@ -71,20 +68,34 @@ export function ClipControls() {
       }}
     >
       <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>Clip Settings</DrawerTitle>
+        <DrawerHeader className="pt-2">
+          <DrawerTitle className="font-display text-lg">
+            Clip Settings
+          </DrawerTitle>
           <DrawerDescription>
             Adjust duration, motion, and easing for this clip.
           </DrawerDescription>
         </DrawerHeader>
 
         {clip ? (
-          <ScrollArea className="max-h-[70vh] overflow-y-auto">
-            <div className="flex flex-col gap-6 px-4 pb-[env(safe-area-inset-bottom)]">
+          <div className="max-h-[85vh] overflow-y-auto">
+            <div className="flex flex-col gap-7 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+              {/* Edit motion on image */}
+              <Button
+                className="h-12 w-full rounded-xl text-base font-medium transition-transform active:scale-[0.97]"
+                onClick={() => {
+                  useUIStore.getState().setMotionKeyframe('start');
+                  closePanel();
+                }}
+              >
+                <Move className="size-5" />
+                Edit motion on image
+              </Button>
+
               {/* Duration */}
-              <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
-                  <Label>Duration</Label>
+                  <Label className="font-display text-sm">Duration</Label>
                   <span className="text-muted-foreground text-sm tabular-nums">
                     {`${(durationLabel / 1000).toFixed(1)}s`}
                   </span>
@@ -101,9 +112,9 @@ export function ClipControls() {
               </div>
 
               {/* Motion presets */}
-              <div className="flex flex-col gap-2">
-                <Label>Motion</Label>
-                <div className="grid grid-cols-3 gap-2">
+              <div className="flex flex-col gap-3">
+                <Label className="font-display text-sm">Motion preset</Label>
+                <div className="grid grid-cols-3 gap-2.5">
                   {MOTION_PRESETS.map((preset) => {
                     const active = clip.kenburns.preset === preset.id;
                     return (
@@ -114,17 +125,21 @@ export function ClipControls() {
                           updateClipKenBurns(clip.id, configFromPreset(preset))
                         }
                         className={cn(
-                          'bg-secondary text-secondary-foreground hover:bg-secondary/80 flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-md p-2 text-center text-xs font-medium transition-colors',
+                          'bg-muted text-foreground flex min-h-[72px] flex-col items-center justify-center gap-1.5 rounded-xl p-2 text-center transition-transform active:scale-[0.97]',
                           active && 'ring-2 ring-primary'
                         )}
                       >
                         {clip.thumbnail ? (
                           <span
-                            className="h-6 w-6 shrink-0 rounded-sm bg-cover bg-center"
+                            className="h-8 w-8 shrink-0 rounded-md bg-cover bg-center"
                             style={{ backgroundImage: `url(${clip.thumbnail})` }}
                           />
-                        ) : null}
-                        <span className="leading-tight">{preset.label}</span>
+                        ) : (
+                          <span className="bg-background h-8 w-8 shrink-0 rounded-md" />
+                        )}
+                        <span className="text-[11px] font-medium leading-tight">
+                          {preset.label}
+                        </span>
                       </button>
                     );
                   })}
@@ -132,8 +147,8 @@ export function ClipControls() {
               </div>
 
               {/* Easing */}
-              <div className="flex flex-col gap-2">
-                <Label>Easing</Label>
+              <div className="flex flex-col gap-3">
+                <Label className="font-display text-sm">Easing</Label>
                 <Select
                   value={easingValue}
                   onValueChange={(name) =>
@@ -143,7 +158,7 @@ export function ClipControls() {
                     })
                   }
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="h-12 w-full rounded-xl">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -156,41 +171,22 @@ export function ClipControls() {
                 </Select>
               </div>
 
-              {/* Adjust framing */}
-              <div className="flex flex-col gap-2">
-                <div className="flex min-h-[44px] items-center justify-between gap-3">
-                  <Label htmlFor="adjust-framing">
-                    Adjust framing in preview
-                  </Label>
-                  <Switch
-                    id="adjust-framing"
-                    checked={adjustFraming}
-                    onCheckedChange={setAdjustFraming}
-                  />
-                </div>
-                {adjustFraming ? (
-                  <p className="text-muted-foreground text-sm">
-                    Drag and pinch the preview to reposition the shot.
-                  </p>
-                ) : null}
-              </div>
-
               {/* Delete */}
               <Button
                 variant="destructive"
-                className="min-h-[44px] w-full"
+                className="h-12 w-full rounded-xl transition-transform active:scale-[0.97]"
                 onClick={() => {
                   removeClip(clip.id);
                   closePanel();
                 }}
               >
-                <Trash2 />
+                <Trash2 className="size-5" />
                 Delete clip
               </Button>
             </div>
-          </ScrollArea>
+          </div>
         ) : (
-          <div className="text-muted-foreground px-4 pb-[env(safe-area-inset-bottom)] pt-2 text-sm">
+          <div className="text-muted-foreground px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 text-sm">
             No clip selected.
           </div>
         )}

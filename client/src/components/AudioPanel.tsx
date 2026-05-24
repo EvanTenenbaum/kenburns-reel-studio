@@ -4,7 +4,6 @@ import { Music, Plus, Trash2 } from 'lucide-react';
 import { useProject } from '@/hooks/useProject';
 import { useUIStore } from '@/store/projectStore';
 import { formatTime } from '@/lib/math';
-import { cn } from '@/lib/utils';
 import type { AudioTrack } from '@/types/audio';
 import {
   Drawer,
@@ -17,7 +16,6 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { ScrollArea } from '@/components/ui/scroll-area';
 
 function TrackWaveform({ url }: { url: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -62,10 +60,15 @@ function TrackWaveform({ url }: { url: string }) {
   }, [url]);
 
   if (failed) {
-    return <div className="bg-muted h-12 w-full rounded" />;
+    return <div className="bg-muted h-12 w-full rounded-lg" />;
   }
 
-  return <div ref={containerRef} className="h-12 w-full overflow-hidden" />;
+  return (
+    <div
+      ref={containerRef}
+      className="bg-muted/40 h-12 w-full overflow-hidden rounded-lg"
+    />
+  );
 }
 
 function TrackCard({
@@ -78,14 +81,19 @@ function TrackCard({
   onUpdate: (id: string, patch: Partial<Omit<AudioTrack, 'id'>>) => void;
 }) {
   return (
-    <div className="bg-card border rounded-lg p-3 space-y-4">
+    <div className="bg-card border-border space-y-5 rounded-xl border p-4">
       <div className="flex items-center gap-2">
-        <span className="flex-1 truncate text-sm font-medium">{track.name}</span>
+        <span className="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-lg">
+          <Music className="size-4" />
+        </span>
+        <span className="font-display flex-1 truncate text-sm">
+          {track.name}
+        </span>
         <Button
           variant="ghost"
           size="icon"
           aria-label="Remove track"
-          className="size-11 text-destructive"
+          className="text-destructive size-11 transition-transform active:scale-[0.97]"
           onClick={() => onRemove(track.id)}
         >
           <Trash2 />
@@ -94,14 +102,15 @@ function TrackCard({
 
       <TrackWaveform url={track.url} />
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         <div className="flex items-center justify-between">
-          <Label>Volume</Label>
+          <Label className="text-sm">Volume</Label>
           <span className="text-muted-foreground text-xs tabular-nums">
             {Math.round(track.volume * 100)}%
           </span>
         </div>
         <Slider
+          className="py-2"
           value={[track.volume * 100]}
           min={0}
           max={100}
@@ -110,14 +119,15 @@ function TrackCard({
         />
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         <div className="flex items-center justify-between">
-          <Label>Fade in</Label>
+          <Label className="text-sm">Fade in</Label>
           <span className="text-muted-foreground text-xs tabular-nums">
             {track.fadeIn} ms
           </span>
         </div>
         <Slider
+          className="py-2"
           value={[track.fadeIn]}
           min={0}
           max={3000}
@@ -126,14 +136,15 @@ function TrackCard({
         />
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         <div className="flex items-center justify-between">
-          <Label>Fade out</Label>
+          <Label className="text-sm">Fade out</Label>
           <span className="text-muted-foreground text-xs tabular-nums">
             {track.fadeOut} ms
           </span>
         </div>
         <Slider
+          className="py-2"
           value={[track.fadeOut]}
           min={0}
           max={3000}
@@ -142,14 +153,15 @@ function TrackCard({
         />
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         <div className="flex items-center justify-between">
-          <Label>Trim</Label>
+          <Label className="text-sm">Trim</Label>
           <span className="text-muted-foreground text-xs tabular-nums">
             {formatTime(track.trimStart)} – {formatTime(track.trimEnd)}
           </span>
         </div>
         <Slider
+          className="py-2"
           value={[track.trimStart, track.trimEnd]}
           min={0}
           max={Math.max(track.duration, track.trimEnd, 100)}
@@ -160,8 +172,10 @@ function TrackCard({
         />
       </div>
 
-      <div className="flex items-center justify-between">
-        <Label htmlFor={`mute-${track.id}`}>Mute</Label>
+      <div className="flex min-h-[44px] items-center justify-between">
+        <Label htmlFor={`mute-${track.id}`} className="text-sm">
+          Mute
+        </Label>
         <Switch
           id={`mute-${track.id}`}
           checked={track.muted}
@@ -197,8 +211,8 @@ export function AudioPanel() {
       }}
     >
       <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>Music</DrawerTitle>
+        <DrawerHeader className="pt-2">
+          <DrawerTitle className="font-display text-lg">Music</DrawerTitle>
           <DrawerDescription>
             Add a soundtrack and shape its volume, fades, and trim.
           </DrawerDescription>
@@ -212,14 +226,21 @@ export function AudioPanel() {
           onChange={handleFiles}
         />
 
-        <ScrollArea className="max-h-[60vh] flex-1">
-          <div className="space-y-3 px-4 pb-[env(safe-area-inset-bottom)]">
+        <div className="max-h-[85vh] flex-1 overflow-y-auto">
+          <div className="space-y-3 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
             {audioTracks.length === 0 ? (
-              <div className="flex flex-col items-center gap-4 py-10 text-center">
-                <Music className="text-muted-foreground size-8" />
-                <p className="text-muted-foreground text-sm">No music added yet</p>
-                <Button className="min-h-11" onClick={handlePick}>
-                  <Plus />
+              <div className="flex flex-col items-center gap-4 py-12 text-center">
+                <span className="bg-muted text-muted-foreground flex size-14 items-center justify-center rounded-2xl">
+                  <Music className="size-7" />
+                </span>
+                <p className="text-muted-foreground text-sm">
+                  No music added yet
+                </p>
+                <Button
+                  className="h-12 rounded-xl px-6 transition-transform active:scale-[0.97]"
+                  onClick={handlePick}
+                >
+                  <Plus className="size-5" />
                   Add music
                 </Button>
               </div>
@@ -235,17 +256,16 @@ export function AudioPanel() {
                 ))}
                 <Button
                   variant="secondary"
-                  className="min-h-11 w-full"
+                  className="h-12 w-full rounded-xl transition-transform active:scale-[0.97]"
                   onClick={handlePick}
                 >
-                  <Plus />
+                  <Plus className="size-5" />
                   Add music
                 </Button>
-                <div className={cn('h-2')} />
               </>
             )}
           </div>
-        </ScrollArea>
+        </div>
       </DrawerContent>
     </Drawer>
   );

@@ -65,7 +65,7 @@ export default function Editor() {
 
   return (
     <div className="editor-surface fixed inset-0 flex flex-col bg-background text-foreground">
-      <header className="flex items-center gap-2 px-3 py-2 border-b border-border">
+      <header className="safe-top flex items-center gap-2 border-b border-border px-3 py-2">
         <Button
           variant="ghost"
           size="icon"

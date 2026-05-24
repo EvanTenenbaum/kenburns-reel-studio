@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, Loader2, Share2 } from 'lucide-react';
+import { CheckCircle2, Download, Loader2, RotateCcw, Share2 } from 'lucide-react';
 
 import { useProject } from '@/hooks/useProject';
 import { useExport } from '@/hooks/useExport';
@@ -76,149 +76,181 @@ export function ExportSheet() {
       }}
     >
       <DrawerContent>
-        <DrawerHeader>
-          <DrawerTitle>Export</DrawerTitle>
+        <DrawerHeader className="pt-2">
+          <DrawerTitle className="font-display text-lg">Export</DrawerTitle>
           <DrawerDescription>
             Render your reel to an MP4 video.
           </DrawerDescription>
         </DrawerHeader>
 
-        <div className="space-y-6 px-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
-          <div className="space-y-2">
-            <Label>Aspect ratio</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {ASPECT_ORDER.map((ratio) => {
-                const spec = OUTPUT_SPECS[ratio];
-                const active = aspectRatio === ratio;
-                return (
-                  <Button
-                    key={ratio}
-                    variant={active ? 'default' : 'outline'}
-                    className="min-h-11 flex-col items-start gap-0 py-2"
-                    disabled={isExporting}
-                    onClick={() => setAspectRatio(ratio)}
-                  >
-                    <span className="font-medium">{spec.label}</span>
-                    <span
+        <div className="max-h-[85vh] overflow-y-auto">
+          <div className="space-y-7 px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <div className="space-y-3">
+              <Label className="font-display text-sm">Aspect ratio</Label>
+              <div className="grid grid-cols-2 gap-2.5">
+                {ASPECT_ORDER.map((ratio) => {
+                  const spec = OUTPUT_SPECS[ratio];
+                  const active = aspectRatio === ratio;
+                  return (
+                    <button
+                      key={ratio}
+                      type="button"
+                      disabled={isExporting}
+                      onClick={() => setAspectRatio(ratio)}
                       className={cn(
-                        'text-xs',
+                        'flex min-h-[56px] flex-col items-start justify-center gap-0.5 rounded-xl border p-3 text-left transition-transform active:scale-[0.97] disabled:opacity-50',
                         active
-                          ? 'text-primary-foreground/80'
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-card border-border text-foreground'
+                      )}
+                    >
+                      <span className="font-display text-sm">{spec.label}</span>
+                      <span
+                        className={cn(
+                          'text-xs tabular-nums',
+                          active
+                            ? 'text-primary-foreground/80'
+                            : 'text-muted-foreground'
+                        )}
+                      >
+                        {ratio}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="font-display text-sm">Quality</Label>
+              <div className="bg-muted grid grid-cols-3 gap-1 rounded-xl p-1">
+                {QUALITY_OPTIONS.map((q) => {
+                  const active = quality === q;
+                  return (
+                    <button
+                      key={q}
+                      type="button"
+                      disabled={isExporting}
+                      onClick={() => setQuality(q)}
+                      className={cn(
+                        'min-h-[44px] rounded-lg text-sm font-medium capitalize transition-transform active:scale-[0.97] disabled:opacity-50',
+                        active
+                          ? 'bg-primary text-primary-foreground'
                           : 'text-muted-foreground'
                       )}
                     >
-                      {ratio}
+                      {q}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="bg-card border-border flex min-h-[56px] items-center justify-between rounded-xl border px-4">
+              <Label htmlFor="include-audio" className="text-sm">
+                Include audio
+              </Label>
+              <Switch
+                id="include-audio"
+                checked={includeAudio}
+                disabled={isExporting}
+                onCheckedChange={setIncludeAudio}
+              />
+            </div>
+
+            {!canExport && (
+              <p className="text-muted-foreground text-sm">
+                Video export isn&apos;t supported in this browser.
+              </p>
+            )}
+
+            {isExporting ? (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-display text-sm">
+                      {STATE_LABELS[progress.state]}
                     </span>
+                    <span className="text-muted-foreground text-sm tabular-nums">
+                      {Math.round(progress.percent)}%
+                    </span>
+                  </div>
+                  <Progress value={progress.percent} />
+                </div>
+                <p className="text-muted-foreground text-xs tabular-nums">
+                  frame {progress.currentFrame} / {progress.totalFrames} · ~
+                  {formatTime(progress.estimatedTimeRemaining)} left
+                </p>
+                <Button
+                  variant="destructive"
+                  className="h-12 w-full rounded-xl transition-transform active:scale-[0.97]"
+                  onClick={cancel}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : isComplete ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-emerald-500">
+                  <CheckCircle2 className="size-5" />
+                  <p className="text-sm">Your reel is ready to download.</p>
+                </div>
+                <a
+                  href={resultUrl}
+                  download="kenburns-reel.mp4"
+                  className={cn(
+                    buttonVariants({ variant: 'default' }),
+                    'h-12 w-full rounded-xl text-base font-medium transition-transform active:scale-[0.97]'
+                  )}
+                >
+                  <Download className="size-5" />
+                  Download MP4
+                </a>
+                {canShare && (
+                  <Button
+                    variant="secondary"
+                    className="h-12 w-full rounded-xl transition-transform active:scale-[0.97]"
+                    onClick={handleShare}
+                  >
+                    <Share2 className="size-5" />
+                    Share
                   </Button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label>Quality</Label>
-            <div className="bg-muted grid grid-cols-3 gap-1 rounded-md p-1">
-              {QUALITY_OPTIONS.map((q) => (
-                <Button
-                  key={q}
-                  variant={quality === q ? 'default' : 'ghost'}
-                  className="min-h-11 capitalize"
-                  disabled={isExporting}
-                  onClick={() => setQuality(q)}
-                >
-                  {q}
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <Label htmlFor="include-audio">Include audio</Label>
-            <Switch
-              id="include-audio"
-              checked={includeAudio}
-              disabled={isExporting}
-              onCheckedChange={setIncludeAudio}
-            />
-          </div>
-
-          {!canExport && (
-            <p className="text-muted-foreground text-sm">
-              Video export isn&apos;t supported in this browser.
-            </p>
-          )}
-
-          {isExporting ? (
-            <div className="space-y-3">
-              <Progress value={progress.percent} />
-              <p className="text-muted-foreground text-sm tabular-nums">
-                {STATE_LABELS[progress.state]} · frame {progress.currentFrame} /{' '}
-                {progress.totalFrames} · ~
-                {formatTime(progress.estimatedTimeRemaining)} left
-              </p>
-              <Button
-                variant="destructive"
-                className="min-h-11 w-full"
-                onClick={cancel}
-              >
-                Cancel
-              </Button>
-            </div>
-          ) : isComplete ? (
-            <div className="space-y-3">
-              <p className="text-sm text-emerald-500">
-                Your reel is ready to download.
-              </p>
-              <a
-                href={resultUrl}
-                download="kenburns-reel.mp4"
-                className={cn(
-                  buttonVariants({ variant: 'default' }),
-                  'min-h-11 w-full'
                 )}
-              >
-                <Download />
-                Download MP4
-              </a>
-              {canShare && (
                 <Button
-                  variant="secondary"
-                  className="min-h-11 w-full"
-                  onClick={handleShare}
+                  variant="outline"
+                  className="h-12 w-full rounded-xl transition-transform active:scale-[0.97]"
+                  onClick={reset}
                 >
-                  <Share2 />
-                  Share
+                  <RotateCcw className="size-5" />
+                  Export again
                 </Button>
-              )}
+              </div>
+            ) : isError ? (
+              <div className="space-y-3">
+                <p className="text-destructive text-sm">
+                  {progress.error ?? 'Something went wrong during export.'}
+                </p>
+                <Button
+                  className="h-12 w-full rounded-xl transition-transform active:scale-[0.97]"
+                  onClick={reset}
+                >
+                  <RotateCcw className="size-5" />
+                  Try again
+                </Button>
+              </div>
+            ) : (
               <Button
-                variant="outline"
-                className="min-h-11 w-full"
-                onClick={reset}
+                className="h-14 w-full rounded-xl text-base font-medium transition-transform active:scale-[0.97]"
+                disabled={!canExport}
+                onClick={() => void start({ quality, includeAudio })}
               >
-                Export again
+                {progress.state === 'preparing' ? (
+                  <Loader2 className="size-5 animate-spin" />
+                ) : null}
+                Export MP4
               </Button>
-            </div>
-          ) : isError ? (
-            <div className="space-y-3">
-              <p className="text-destructive text-sm">
-                {progress.error ?? 'Something went wrong during export.'}
-              </p>
-              <Button className="min-h-11 w-full" onClick={reset}>
-                Try again
-              </Button>
-            </div>
-          ) : (
-            <Button
-              className="min-h-11 w-full"
-              disabled={!canExport}
-              onClick={() => void start({ quality, includeAudio })}
-            >
-              {progress.state === 'preparing' ? (
-                <Loader2 className="animate-spin" />
-              ) : null}
-              Export MP4
-            </Button>
-          )}
+            )}
+          </div>
         </div>
       </DrawerContent>
     </Drawer>

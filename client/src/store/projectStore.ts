@@ -212,6 +212,9 @@ export interface TransitionContext {
   toClipId: string;
 }
 
+/** Which keyframe the on-image motion editor is currently editing. */
+export type MotionKeyframe = 'start' | 'end';
+
 export interface UIState {
   /** Playhead position on the timeline in ms */
   playhead: number;
@@ -220,6 +223,8 @@ export interface UIState {
   selectedTransitionId: string | null;
   /** Which adjacent clip pair the transition picker targets */
   transitionContext: TransitionContext | null;
+  /** Active keyframe in the on-image motion editor, or null when not editing */
+  motionKeyframe: MotionKeyframe | null;
   /** Timeline scale in pixels per second */
   pixelsPerSecond: number;
   openPanel: PanelKind;
@@ -229,6 +234,7 @@ export interface UIState {
   selectClip: (clipId: string | null) => void;
   selectTransition: (transitionId: string | null) => void;
   setTransitionContext: (context: TransitionContext | null) => void;
+  setMotionKeyframe: (keyframe: MotionKeyframe | null) => void;
   setPixelsPerSecond: (value: number) => void;
   openPanelKind: (panel: PanelKind) => void;
   closePanel: () => void;
@@ -243,6 +249,7 @@ export const useUIStore = create<UIState>((set) => ({
   selectedClipId: null,
   selectedTransitionId: null,
   transitionContext: null,
+  motionKeyframe: null,
   pixelsPerSecond: DEFAULT_PIXELS_PER_SECOND,
   openPanel: 'none',
 
@@ -253,6 +260,7 @@ export const useUIStore = create<UIState>((set) => ({
   selectTransition: (selectedTransitionId) =>
     set({ selectedTransitionId, selectedClipId: null }),
   setTransitionContext: (transitionContext) => set({ transitionContext }),
+  setMotionKeyframe: (motionKeyframe) => set({ motionKeyframe }),
   setPixelsPerSecond: (pixelsPerSecond) =>
     set({ pixelsPerSecond: Math.min(Math.max(pixelsPerSecond, 10), 400) }),
   openPanelKind: (openPanel) => set({ openPanel }),
@@ -264,6 +272,7 @@ export const useUIStore = create<UIState>((set) => ({
       selectedClipId: null,
       selectedTransitionId: null,
       transitionContext: null,
+      motionKeyframe: null,
       openPanel: 'none',
     }),
 }));

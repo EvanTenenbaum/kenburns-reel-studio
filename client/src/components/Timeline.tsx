@@ -36,6 +36,7 @@ import {
   Circle,
   ImageIcon,
   Maximize,
+  Minus,
   Plus,
   Scissors,
   Wind,
@@ -52,8 +53,8 @@ import type { TransitionType } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-const RULER_HEIGHT = 24;
-const STRIP_HEIGHT = 88;
+const RULER_HEIGHT = 28;
+const STRIP_HEIGHT = 104;
 
 /** Visual metadata for each transition type shown in a slot. */
 const TRANSITION_META: Record<TransitionType, { icon: LucideIcon; label: string }> = {
@@ -87,7 +88,7 @@ function SortableClip({ layout, pixelsPerSecond, selected, onSelect }: SortableC
     width: clipWidthPx(clip.duration, pixelsPerSecond),
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.6 : 1,
+    opacity: isDragging ? 0.7 : 1,
     backgroundImage: clip.thumbnail ? `url(${clip.thumbnail})` : undefined,
   };
 
@@ -101,25 +102,31 @@ function SortableClip({ layout, pixelsPerSecond, selected, onSelect }: SortableC
       {...attributes}
       {...listeners}
       className={cn(
-        'group relative h-full shrink-0 touch-none overflow-hidden rounded-md border border-border bg-muted bg-cover bg-center text-left',
+        'group relative h-full shrink-0 touch-none overflow-hidden rounded-xl border bg-muted bg-cover bg-center text-left',
+        'transition-transform active:scale-[0.97]',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
-        selected && 'ring-2 ring-primary',
-        isDragging && 'z-10'
+        selected
+          ? 'z-10 border-primary/70 shadow-lg shadow-black/30 ring-2 ring-primary ring-offset-2 ring-offset-card'
+          : 'border-border shadow-sm',
+        isDragging && 'z-10 shadow-xl shadow-black/40'
       )}
     >
       {!clip.thumbnail && (
         <span className="flex h-full w-full items-center justify-center text-muted-foreground">
-          <ImageIcon className="size-5" />
+          <ImageIcon className="size-6" />
         </span>
       )}
 
+      {/* Gradient overlay for label legibility */}
+      <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/65 via-black/5 to-black/30" />
+
       {/* Index badge */}
-      <span className="absolute left-1 top-1 rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-foreground">
+      <span className="absolute left-1.5 top-1.5 flex min-w-5 items-center justify-center rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-white backdrop-blur-sm">
         {index + 1}
       </span>
 
       {/* Duration label */}
-      <span className="absolute bottom-1 right-1 rounded bg-background/70 px-1.5 py-0.5 text-[10px] tabular-nums text-foreground">
+      <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/55 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-white backdrop-blur-sm">
         {(clip.duration / 1000).toFixed(1)}s
       </span>
     </button>
@@ -155,17 +162,17 @@ function TransitionSlot({ fromClipId, toClipId, type, onOpen }: TransitionSlotPr
           e.stopPropagation();
           onOpen(fromClipId, toClipId);
         }}
-        className="absolute left-1/2 top-1/2 flex size-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+        className="group absolute left-1/2 top-1/2 z-30 flex size-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center transition-transform active:scale-[0.97]"
       >
         <span
           className={cn(
-            'flex size-7 rotate-45 items-center justify-center rounded-md border shadow-sm transition-colors',
+            'flex size-8 rotate-45 items-center justify-center rounded-lg border shadow-md transition-colors',
             meta
-              ? 'border-primary bg-primary text-primary-foreground'
-              : 'border-border bg-card text-muted-foreground hover:text-foreground'
+              ? 'border-primary/60 bg-primary text-primary-foreground'
+              : 'border-border bg-card text-muted-foreground'
           )}
         >
-          <Icon className="size-3.5 -rotate-45" />
+          <Icon className="size-4 -rotate-45" />
         </span>
       </button>
     </div>
@@ -321,13 +328,32 @@ export function Timeline() {
   const playheadLeft = timeToFlowPx(playhead);
   const clipIds = layout.map((l) => l.clip.id);
 
+  // Subtle ruler ticks at second boundaries, labelled every few seconds so
+  // the strip reads like a real editor scale without crowding at 375px.
+  const ticks = useMemo(() => {
+    const totalSeconds = totalDuration / 1000;
+    if (totalSeconds <= 0) return [] as { left: number; major: boolean; label: string | null }[];
+    const step = pixelsPerSecond < 24 ? 5 : pixelsPerSecond < 60 ? 2 : 1;
+    const labelEvery = pixelsPerSecond < 24 ? 10 : pixelsPerSecond < 60 ? 4 : 2;
+    const out: { left: number; major: boolean; label: string | null }[] = [];
+    for (let s = 0; s <= totalSeconds + 0.001; s += step) {
+      const left = timeToFlowPx(s * 1000);
+      const major = Math.round(s) % labelEvery === 0;
+      out.push({ left, major, label: major ? formatTime(s * 1000) : null });
+    }
+    return out;
+  }, [totalDuration, pixelsPerSecond, timeToFlowPx]);
+
   if (layout.length === 0) {
     return (
       <div
-        className="flex w-full items-center justify-center bg-card text-sm text-muted-foreground"
+        className="flex w-full flex-col items-center justify-center gap-2 border-t border-border bg-card px-4 text-center"
         style={{ height: STRIP_HEIGHT + RULER_HEIGHT }}
       >
-        No clips yet — add images to begin
+        <span className="flex size-10 items-center justify-center rounded-xl border border-dashed border-border bg-muted/40 text-muted-foreground">
+          <ImageIcon className="size-5" />
+        </span>
+        <p className="text-sm text-muted-foreground">No clips yet — add images to begin</p>
       </div>
     );
   }
@@ -336,7 +362,7 @@ export function Timeline() {
     <div className="w-full select-none border-t border-border bg-card">
       <div
         ref={scrollRef}
-        className="relative w-full touch-pan-x overflow-x-auto overflow-y-hidden"
+        className="relative w-full touch-pan-x overflow-x-auto overflow-y-hidden overscroll-x-contain scroll-smooth [-webkit-overflow-scrolling:touch] [scrollbar-width:none]"
       >
         <div
           ref={innerRef}
@@ -355,19 +381,29 @@ export function Timeline() {
             onPointerMove={handleRulerPointerMove}
             onPointerUp={handleRulerPointerUp}
             onPointerCancel={handleRulerPointerUp}
-            className="relative cursor-pointer border-b border-border bg-background/40"
+            className="relative cursor-pointer touch-none border-b border-border bg-background/50"
             style={{ height: RULER_HEIGHT }}
           >
-            <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[10px] tabular-nums text-muted-foreground">
-              {formatTime(playhead)}
-            </span>
-            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] tabular-nums text-muted-foreground">
-              {formatTime(totalDuration)}
-            </span>
+            {/* Tick marks + time labels */}
+            {ticks.map((tick, i) => (
+              <span key={i} className="pointer-events-none absolute bottom-0" style={{ left: tick.left }}>
+                <span
+                  className={cn(
+                    'block w-px -translate-x-1/2 bg-border',
+                    tick.major ? 'h-2.5' : 'h-1.5 opacity-60'
+                  )}
+                />
+                {tick.label && (
+                  <span className="absolute bottom-2.5 left-0 -translate-x-1/2 whitespace-nowrap text-[9px] font-medium tabular-nums text-muted-foreground">
+                    {tick.label}
+                  </span>
+                )}
+              </span>
+            ))}
           </div>
 
           {/* Clip strip with sortable clips + transition slots */}
-          <div className="relative p-2" style={{ height: STRIP_HEIGHT }}>
+          <div className="relative px-2 py-3" style={{ height: STRIP_HEIGHT }}>
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
@@ -404,38 +440,44 @@ export function Timeline() {
             </DndContext>
           </div>
 
-          {/* Playhead — spans ruler + strip */}
+          {/* Playhead — spans ruler + strip, with a grabbable head */}
           <div
-            className="pointer-events-none absolute top-0 z-20 w-0.5 bg-primary"
+            className="pointer-events-none absolute top-0 z-20 w-px bg-primary shadow-[0_0_6px_var(--color-primary)]"
             style={{ left: playheadLeft, height: STRIP_HEIGHT + RULER_HEIGHT }}
           >
-            <span className="absolute -top-0.5 left-1/2 size-2 -translate-x-1/2 rounded-full bg-primary" />
+            <span className="absolute -top-1 left-1/2 size-3.5 -translate-x-1/2 rounded-full border-2 border-card bg-primary shadow-md" />
           </div>
         </div>
       </div>
 
       {/* Zoom controls (touch-friendly fallback for pinch) */}
-      <div className="flex items-center justify-end gap-1 px-2 py-1">
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          aria-label="Zoom out timeline"
-          className="size-8"
-          onClick={() => setPixelsPerSecond(pixelsPerSecond * 0.8)}
-        >
-          <span className="text-base leading-none">−</span>
-        </Button>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          aria-label="Zoom in timeline"
-          className="size-8"
-          onClick={() => setPixelsPerSecond(pixelsPerSecond * 1.25)}
-        >
-          <Plus className="size-4" />
-        </Button>
+      <div
+        className="flex items-center justify-between gap-1 px-3 pt-1.5"
+        style={{ paddingBottom: 'max(0.375rem, env(safe-area-inset-bottom))' }}
+      >
+        <span className="font-display text-xs font-medium text-muted-foreground">Timeline</span>
+        <div className="flex items-center gap-1 rounded-full border border-border bg-muted/40 p-0.5">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label="Zoom out timeline"
+            className="size-11 rounded-full transition-transform active:scale-[0.97]"
+            onClick={() => setPixelsPerSecond(pixelsPerSecond * 0.8)}
+          >
+            <Minus className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label="Zoom in timeline"
+            className="size-11 rounded-full transition-transform active:scale-[0.97]"
+            onClick={() => setPixelsPerSecond(pixelsPerSecond * 1.25)}
+          >
+            <Plus className="size-4" />
+          </Button>
+        </div>
       </div>
     </div>
   );

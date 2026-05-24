@@ -37,7 +37,10 @@ export function Toolbar() {
   };
 
   return (
-    <div className="flex items-center gap-1 rounded-2xl border border-border bg-card/90 px-2 py-1.5 shadow-lg backdrop-blur">
+    <div
+      className="flex items-center gap-1 rounded-2xl border border-border bg-card/90 px-2 py-1.5 shadow-lg shadow-black/30 backdrop-blur-md"
+      style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
+    >
       <input
         ref={fileInputRef}
         type="file"
@@ -47,72 +50,82 @@ export function Toolbar() {
         onChange={handleFilesSelected}
       />
 
+      {/* Group: add media */}
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-11 w-11 rounded-xl transition-transform active:scale-[0.97]"
+          aria-label="Add image"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ImagePlus className="size-5" />
+        </Button>
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-11 w-11 rounded-xl transition-transform active:scale-[0.97]"
+          aria-label="Add music"
+          onClick={() => openPanelKind('audio')}
+        >
+          <Music className="size-5" />
+        </Button>
+      </div>
+
+      <Separator orientation="vertical" className="mx-1 h-7" />
+
+      {/* Group: history */}
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-11 w-11 rounded-xl transition-transform active:scale-[0.97]"
+          aria-label="Undo"
+          disabled={!canUndo}
+          onClick={() => undo()}
+        >
+          <Undo2 className="size-5" />
+        </Button>
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-11 w-11 rounded-xl transition-transform active:scale-[0.97]"
+          aria-label="Redo"
+          disabled={!canRedo}
+          onClick={() => redo()}
+        >
+          <Redo2 className="size-5" />
+        </Button>
+      </div>
+
+      <Separator orientation="vertical" className="mx-1 h-7" />
+
+      {/* Play / pause */}
       <Button
         type="button"
-        variant="ghost"
+        variant="secondary"
         size="icon"
-        className="h-11 w-11"
-        aria-label="Add image"
-        onClick={() => fileInputRef.current?.click()}
+        className="h-11 w-11 rounded-xl transition-transform active:scale-[0.97]"
+        aria-label={isPlaying ? 'Pause' : 'Play'}
+        onClick={() => toggle()}
       >
-        <ImagePlus className="size-5" />
+        {isPlaying ? <Pause className="size-5" /> : <Play className="size-5 fill-current" />}
       </Button>
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-11 w-11"
-        aria-label="Add music"
-        onClick={() => openPanelKind('audio')}
-      >
-        <Music className="size-5" />
-      </Button>
+      <Separator orientation="vertical" className="mx-1 h-7" />
 
-      <Separator orientation="vertical" className="mx-0.5 h-7" />
-
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-11 w-11"
-        aria-label="Undo"
-        disabled={!canUndo}
-        onClick={() => undo()}
-      >
-        <Undo2 className="size-5" />
-      </Button>
-
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-11 w-11"
-        aria-label="Redo"
-        disabled={!canRedo}
-        onClick={() => redo()}
-      >
-        <Redo2 className="size-5" />
-      </Button>
-
+      {/* Primary action: export */}
       <Button
         type="button"
         variant="default"
         size="icon"
-        className="h-11 w-11"
-        aria-label={isPlaying ? 'Pause' : 'Play'}
-        onClick={() => toggle()}
-      >
-        {isPlaying ? <Pause className="size-5" /> : <Play className="size-5" />}
-      </Button>
-
-      <Separator orientation="vertical" className="mx-0.5 h-7" />
-
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-11 w-11"
+        className="h-11 w-11 rounded-xl shadow-sm transition-transform active:scale-[0.97]"
         aria-label="Export"
         onClick={() => openPanelKind('export')}
       >

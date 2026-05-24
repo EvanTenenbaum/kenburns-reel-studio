@@ -16,11 +16,13 @@ import { getClipAtTime } from '@/lib/timeline';
 import { getTransitionPreviewStyle } from '@/lib/transitionPreview';
 import { OUTPUT_SPECS } from '@/constants/instagram';
 import { cn } from '@/lib/utils';
+import { MotionEditor } from '@/components/MotionEditor';
+import { MAX_MOTION_ZOOM } from '@/lib/viewportFrame';
 import type { Clip } from '@/types/project';
-import type { KenBurnsConfig } from '@/types/kenburns';
+import type { KenBurnsConfig, Viewport } from '@/types/kenburns';
 
 const MIN_ZOOM = 1;
-const MAX_ZOOM = 4;
+const MAX_ZOOM = MAX_MOTION_ZOOM;
 /** Movement (px) below which a drag is treated as a tap. */
 const TAP_THRESHOLD = 6;
 
@@ -42,7 +44,7 @@ function cloneConfig(config: KenBurnsConfig): KenBurnsConfig {
 }
 
 export function Preview() {
-  const { project, layout, transitions, aspectRatio, updateClipKenBurns } =
+  const { project, clips, layout, transitions, aspectRatio, updateClipKenBurns } =
     useProject();
 
   const canvasAspect = useMemo(() => {
@@ -54,6 +56,9 @@ export function Preview() {
 
   const playhead = useUIStore((s) => s.playhead);
   const selectClip = useUIStore((s) => s.selectClip);
+  const selectedClipId = useUIStore((s) => s.selectedClipId);
+  const motionKeyframe = useUIStore((s) => s.motionKeyframe);
+  const setMotionKeyframe = useUIStore((s) => s.setMotionKeyframe);
 
   // ── Stage measurement ─────────────────────────────────────────────────────
   const containerRef = useRef<HTMLDivElement>(null);
@@ -114,7 +119,8 @@ export function Preview() {
   }, [isSingle, activeClip, draft]);
 
   // ── Gestures (single active clip only) ──────────────────────────────────────
-  const gesturesEnabled = isSingle && activeClip !== null && stageW > 0 && stageH > 0;
+  const gesturesEnabled =
+    isSingle && activeClip !== null && stageW > 0 && stageH > 0 && motionKeyframe === null;
 
   const buildPannedConfig = useCallback(
     (base: KenBurnsConfig, dxn: number, dyn: number): KenBurnsConfig => {
@@ -221,6 +227,59 @@ export function Preview() {
     }
     return activeClip;
   }, [isSingle, activeClip, draft]);
+
+  // ── On-image motion editor (react-moveable) ────────────────────────────────
+  // Edits the selected clip (falling back to the clip under the playhead).
+  const editClip: Clip | null = useMemo(() => {
+    if (!motionKeyframe) return null;
+    return clips.find((c) => c.id === selectedClipId) ?? activeClip ?? null;
+  }, [motionKeyframe, clips, selectedClipId, activeClip]);
+
+  const clampEdit = useCallback(
+    (vp: Viewport): Viewport => {
+      const clamped = editClip ? clampForClip(editClip, vp) : vp;
+      // clampForClip only enforces a minimum zoom; cap the maximum so the crop
+      // rectangle cannot collapse toward a point.
+      return { ...clamped, zoom: Math.min(clamped.zoom, MAX_MOTION_ZOOM) };
+    },
+    [editClip, clampForClip]
+  );
+
+  const noopViewport = useCallback(() => {}, []);
+
+  const commitMotion = useCallback(
+    (keyframe: 'start' | 'end', vp: Viewport) => {
+      if (!editClip) return;
+      const kb = editClip.kenburns;
+      const next: KenBurnsConfig =
+        keyframe === 'start'
+          ? { ...kb, startViewport: vp, preset: 'custom' }
+          : { ...kb, endViewport: vp, preset: 'custom' };
+      updateClipKenBurns(editClip.id, next);
+    },
+    [editClip, updateClipKenBurns]
+  );
+
+  if (motionKeyframe && editClip && editClip.imageUrl) {
+    return (
+      <div className="relative h-full w-full bg-neutral-950">
+        <MotionEditor
+          imageUrl={editClip.imageUrl}
+          naturalWidth={editClip.naturalWidth}
+          naturalHeight={editClip.naturalHeight}
+          canvasAspect={canvasAspect}
+          startViewport={editClip.kenburns.startViewport}
+          endViewport={editClip.kenburns.endViewport}
+          activeKeyframe={motionKeyframe}
+          clampViewport={clampEdit}
+          onKeyframeChange={setMotionKeyframe}
+          onViewportChange={noopViewport}
+          onViewportCommit={commitMotion}
+          onClose={() => setMotionKeyframe(null)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full w-full items-center justify-center bg-neutral-950 p-3">
