@@ -1,11 +1,20 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import Moveable from 'react-moveable';
-import type { OnDrag, OnDragEnd, OnResize, OnResizeEnd } from 'react-moveable';
-import { X } from 'lucide-react';
+import { Pause, Play, RotateCcw, X } from 'lucide-react';
 
-import type { Viewport } from '@/types/kenburns';
+import type { EasingConfig, EasingPreset, Viewport } from '@/types/kenburns';
+import { interpolateViewport } from '@/engine/kenburns';
+import { MOTION_PRESETS, type PresetDefinition } from '@/constants/presets';
 import { Button } from '@/components/ui/button';
+import { Slider } from '@/components/ui/slider';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
   computeImageDisplay,
@@ -17,6 +26,8 @@ import {
 
 export type MotionKeyframe = 'start' | 'end';
 
+type Corner = 'nw' | 'ne' | 'sw' | 'se';
+
 interface MotionEditorProps {
   imageUrl: string;
   naturalWidth: number;
@@ -26,13 +37,18 @@ interface MotionEditorProps {
   startViewport: Viewport;
   endViewport: Viewport;
   activeKeyframe: MotionKeyframe;
+  /** Clip duration in ms — drives the speed slider and preview playback. */
+  durationMs: number;
+  /** Clip easing — drives the easing select and preview playback. */
+  easing: EasingConfig;
   /** Clamp a viewport so the crop stays inside the image (provided by parent). */
   clampViewport: (vp: Viewport) => Viewport;
   onKeyframeChange: (kf: MotionKeyframe) => void;
-  /** live, during gesture */
-  onViewportChange: (kf: MotionKeyframe, vp: Viewport) => void;
-  /** on release (one undo step) */
+  /** on release of a drag/resize gesture (one undo step) */
   onViewportCommit: (kf: MotionKeyframe, vp: Viewport) => void;
+  onDurationChange: (ms: number) => void;
+  onEasingChange: (easing: EasingConfig) => void;
+  onApplyPreset: (preset: PresetDefinition) => void;
   onClose: () => void;
 }
 
@@ -41,10 +57,38 @@ interface ContainerSize {
   height: number;
 }
 
+interface Gesture {
+  mode: 'move' | 'resize';
+  corner: Corner | null;
+  startClientX: number;
+  startClientY: number;
+  startRect: FrameRect;
+  containerLeft: number;
+  containerTop: number;
+}
+
 const KEYFRAME_LABEL: Record<MotionKeyframe, string> = {
   start: 'Start',
   end: 'End',
 };
+
+const EASING_OPTIONS: { value: EasingPreset; label: string }[] = [
+  { value: 'linear', label: 'Linear' },
+  { value: 'ease-in', label: 'Ease In' },
+  { value: 'ease-out', label: 'Ease Out' },
+  { value: 'ease-in-out', label: 'Ease In-Out' },
+  { value: 'slow-start', label: 'Slow Start' },
+  { value: 'slow-end', label: 'Slow End' },
+];
+
+const CORNERS: { corner: Corner; className: string }[] = [
+  { corner: 'nw', className: 'left-0 top-0 cursor-nwse-resize' },
+  { corner: 'ne', className: 'left-full top-0 cursor-nesw-resize' },
+  { corner: 'sw', className: 'left-0 top-full cursor-nesw-resize' },
+  { corner: 'se', className: 'left-full top-full cursor-nwse-resize' },
+];
+
+const MIN_PREVIEW_MS = 600;
 
 export function MotionEditor(props: MotionEditorProps): JSX.Element {
   const {
@@ -55,27 +99,35 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
     startViewport,
     endViewport,
     activeKeyframe,
+    durationMs,
+    easing,
     clampViewport,
     onKeyframeChange,
-    onViewportChange,
     onViewportCommit,
+    onDurationChange,
+    onEasingChange,
+    onApplyPreset,
     onClose,
   } = props;
 
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const activeFrameRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
 
   const [container, setContainer] = useState<ContainerSize>({
     width: 0,
     height: 0,
   });
 
-  // The active frame's live rectangle, in container pixels.
+  // The active frame's live rectangle, in stage pixels.
   const [activeRect, setActiveRect] = useState<FrameRect | null>(null);
+  const [isGesturing, setIsGesturing] = useState(false);
 
-  // Measure the container with a ResizeObserver.
+  // Preview playback state.
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [previewRect, setPreviewRect] = useState<FrameRect | null>(null);
+
+  // Measure the stage area (the region above the controls) with a ResizeObserver.
   useLayoutEffect(() => {
-    const el = containerRef.current;
+    const el = stageRef.current;
     if (!el) return;
 
     const measure = () => {
@@ -113,10 +165,10 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
     activeKeyframe === 'start' ? endViewport : startViewport;
 
   // Sync the active frame rect from props whenever the active keyframe, its
-  // viewport, or the layout changes. We gate on the *source* viewport + display
-  // so our own emitted onViewportChange (which feeds back into props) does not
-  // cause an infinite loop: the recomputed rect is value-equal to what we set.
+  // viewport, or the layout changes. We do NOT sync mid-gesture so our own
+  // live updates are not clobbered.
   useEffect(() => {
+    if (isGesturing) return;
     if (!hasImage || !hasContainer) {
       setActiveRect(null);
       return;
@@ -139,6 +191,7 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    isGesturing,
     activeKeyframe,
     activeViewport.x,
     activeViewport.y,
@@ -153,8 +206,12 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
     hasContainer,
   ]);
 
-  const emit = useCallback(
-    (rect: FrameRect, commit: boolean) => {
+  // Round-trip a candidate rect through the viewport + clamp so the displayed
+  // crop is always the clamped truth: it can never drift, invert, or escape the
+  // image. This is the heart of the "boxes stay put" guarantee.
+  const applyRect = useCallback(
+    (rect: FrameRect, commit: boolean): void => {
+      if (display.scale === 0) return;
       const vp = clampViewport(
         frameRectToViewport(
           rect,
@@ -164,11 +221,15 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
           display,
         ),
       );
-      if (commit) {
-        onViewportCommit(activeKeyframe, vp);
-      } else {
-        onViewportChange(activeKeyframe, vp);
-      }
+      const clampedRect = viewportToFrameRect(
+        vp,
+        naturalWidth,
+        naturalHeight,
+        canvasAspect,
+        display,
+      );
+      setActiveRect(clampedRect);
+      if (commit) onViewportCommit(activeKeyframe, vp);
     },
     [
       clampViewport,
@@ -177,101 +238,177 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
       canvasAspect,
       display,
       activeKeyframe,
-      onViewportChange,
       onViewportCommit,
     ],
   );
 
-  const handleDrag = useCallback(
-    (e: OnDrag) => {
-      e.target.style.left = `${e.left}px`;
-      e.target.style.top = `${e.top}px`;
-      const rect: FrameRect = {
-        left: e.left,
-        top: e.top,
-        width: e.width,
-        height: e.height,
+  // Keep the latest applyRect reachable from the window pointer listeners
+  // without re-binding them on every render.
+  const applyRectRef = useRef(applyRect);
+  applyRectRef.current = applyRect;
+  const gestureRef = useRef<Gesture | null>(null);
+
+  const computeCandidate = useCallback(
+    (g: Gesture, clientX: number, clientY: number): FrameRect => {
+      if (g.mode === 'move') {
+        return {
+          left: g.startRect.left + (clientX - g.startClientX),
+          top: g.startRect.top + (clientY - g.startClientY),
+          width: g.startRect.width,
+          height: g.startRect.height,
+        };
+      }
+
+      // Resize: the corner opposite the dragged handle is the fixed anchor.
+      const { left, top, width, height } = g.startRect;
+      const right = left + width;
+      const bottom = top + height;
+      const corner = g.corner ?? 'se';
+      const signX = corner === 'ne' || corner === 'se' ? 1 : -1;
+      const signY = corner === 'sw' || corner === 'se' ? 1 : -1;
+      const anchorX = signX > 0 ? left : right;
+      const anchorY = signY > 0 ? top : bottom;
+
+      const px = clientX - g.containerLeft;
+      const py = clientY - g.containerTop;
+      const distX = Math.max(1, (px - anchorX) * signX);
+      const distY = Math.max(1, (py - anchorY) * signY);
+      // Keep the output aspect ratio: follow whichever axis the pointer led.
+      const newWidth = Math.max(distX, distY * canvasAspect);
+      const newHeight = newWidth / canvasAspect;
+
+      return {
+        left: signX > 0 ? anchorX : anchorX - newWidth,
+        top: signY > 0 ? anchorY : anchorY - newHeight,
+        width: newWidth,
+        height: newHeight,
       };
-      setActiveRect(rect);
-      emit(rect, false);
     },
-    [emit],
+    [canvasAspect],
   );
 
-  const handleDragEnd = useCallback(
-    (e: OnDragEnd) => {
-      const el = e.target as HTMLElement;
-      const rect: FrameRect = {
-        left: parseFloat(el.style.left) || 0,
-        top: parseFloat(el.style.top) || 0,
-        width: el.offsetWidth,
-        height: el.offsetHeight,
-      };
-      setActiveRect(rect);
-      emit(rect, true);
+  const handlePointerMove = useCallback(
+    (e: PointerEvent) => {
+      const g = gestureRef.current;
+      if (!g) return;
+      e.preventDefault();
+      applyRectRef.current(computeCandidate(g, e.clientX, e.clientY), false);
     },
-    [emit],
+    [computeCandidate],
   );
 
-  const handleResize = useCallback(
-    (e: OnResize) => {
-      const el = e.target as HTMLElement;
-      el.style.width = `${e.width}px`;
-      el.style.height = `${e.height}px`;
-      const [dx, dy] = e.drag.beforeTranslate;
-      el.style.transform = `translate(${dx}px, ${dy}px)`;
-
-      const baseLeft = parseFloat(el.style.left) || 0;
-      const baseTop = parseFloat(el.style.top) || 0;
-      const rect: FrameRect = {
-        left: baseLeft + dx,
-        top: baseTop + dy,
-        width: e.width,
-        height: e.height,
-      };
-      setActiveRect(rect);
-      emit(rect, false);
+  const handlePointerUp = useCallback(
+    (e: PointerEvent) => {
+      const g = gestureRef.current;
+      if (!g) return;
+      applyRectRef.current(computeCandidate(g, e.clientX, e.clientY), true);
+      gestureRef.current = null;
+      setIsGesturing(false);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
     },
-    [emit],
+    [computeCandidate, handlePointerMove],
   );
 
-  const handleResizeEnd = useCallback(
-    (e: OnResizeEnd) => {
-      // Bake the translate produced during resize back into left/top so the
-      // next gesture (and the props re-sync) starts from a clean transform.
-      const el = e.target as HTMLElement;
-      const matrix = new DOMMatrixReadOnly(getComputedStyle(el).transform);
-      const dx = matrix.m41;
-      const dy = matrix.m42;
-      const baseLeft = parseFloat(el.style.left) || 0;
-      const baseTop = parseFloat(el.style.top) || 0;
-      const rect: FrameRect = {
-        left: baseLeft + dx,
-        top: baseTop + dy,
-        width: el.offsetWidth,
-        height: el.offsetHeight,
+  const beginGesture = useCallback(
+    (mode: 'move' | 'resize', corner: Corner | null, e: React.PointerEvent) => {
+      if (isPreviewing || !activeRect || !stageRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const bounds = stageRef.current.getBoundingClientRect();
+      gestureRef.current = {
+        mode,
+        corner,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startRect: activeRect,
+        containerLeft: bounds.left,
+        containerTop: bounds.top,
       };
-      el.style.left = `${rect.left}px`;
-      el.style.top = `${rect.top}px`;
-      el.style.transform = '';
-      setActiveRect(rect);
-      emit(rect, true);
+      setIsGesturing(true);
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointercancel', handlePointerUp);
     },
-    [emit],
+    [isPreviewing, activeRect, handlePointerMove, handlePointerUp],
   );
 
-  // Moveable `position: 'css'` treats right/bottom as distances from the
-  // container's right/bottom edges (not absolute coordinates), so the frame
-  // stays clamped to the displayed image even when it is letterboxed.
-  const bounds = {
-    left: display.offsetX,
-    top: display.offsetY,
-    right: Math.max(0, container.width - (display.offsetX + display.dispW)),
-    bottom: Math.max(0, container.height - (display.offsetY + display.dispH)),
-    position: 'css' as const,
-  };
+  useEffect(
+    () => () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    },
+    [handlePointerMove, handlePointerUp],
+  );
 
-  const showMoveable = hasImage && hasContainer && activeRect !== null;
+  // ── Preview playback ──────────────────────────────────────────────────────
+  const stopPreview = useCallback(() => {
+    setIsPreviewing(false);
+    setPreviewRect(null);
+  }, []);
+
+  useEffect(() => {
+    if (!isPreviewing || !hasImage || !hasContainer || display.scale === 0) {
+      return;
+    }
+    const total = Math.max(durationMs, MIN_PREVIEW_MS);
+    let raf = 0;
+    let startTs = 0;
+    const tick = (ts: number) => {
+      if (!startTs) startTs = ts;
+      const progress = ((ts - startTs) % total) / total;
+      const vp = clampViewport(
+        interpolateViewport(startViewport, endViewport, progress, easing),
+      );
+      setPreviewRect(
+        viewportToFrameRect(
+          vp,
+          naturalWidth,
+          naturalHeight,
+          canvasAspect,
+          display,
+        ),
+      );
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    isPreviewing,
+    durationMs,
+    easing,
+    startViewport.x,
+    startViewport.y,
+    startViewport.zoom,
+    endViewport.x,
+    endViewport.y,
+    endViewport.zoom,
+    naturalWidth,
+    naturalHeight,
+    canvasAspect,
+    display.scale,
+    display.offsetX,
+    display.offsetY,
+    hasImage,
+    hasContainer,
+  ]);
+
+  const selectKeyframe = useCallback(
+    (kf: MotionKeyframe) => {
+      stopPreview();
+      onKeyframeChange(kf);
+    },
+    [stopPreview, onKeyframeChange],
+  );
+
+  const resetActiveKeyframe = useCallback(() => {
+    if (display.scale === 0) return;
+    const centered = clampViewport({ x: 0.5, y: 0.5, zoom: 1 });
+    onViewportCommit(activeKeyframe, centered);
+  }, [display.scale, clampViewport, onViewportCommit, activeKeyframe]);
 
   const inactiveRect: FrameRect | null =
     hasImage && hasContainer
@@ -284,125 +421,299 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
         )
       : null;
 
+  const durationSec = (durationMs / 1000).toFixed(1);
+  const easingValue: EasingPreset =
+    easing.type === 'preset' ? easing.name : 'linear';
+
   return (
-    <div ref={containerRef} className="absolute inset-0 overflow-hidden bg-black select-none">
-      {/* The full image, dimmed. */}
-      {hasContainer && hasImage ? (
-        <img
-          src={imageUrl}
-          alt=""
-          draggable={false}
-          className="pointer-events-none absolute select-none opacity-60"
-          style={{
-            left: display.offsetX,
-            top: display.offsetY,
-            width: display.dispW,
-            height: display.dispH,
-          }}
-        />
-      ) : null}
+    <div className="absolute inset-0 flex flex-col bg-neutral-950 select-none">
+      {/* Stage: the measured area where the image + crop frames live. */}
+      <div
+        ref={stageRef}
+        className="relative flex-1 overflow-hidden bg-black"
+        style={{ touchAction: 'none' }}
+      >
+        {/* The full image, dimmed (the excluded area). */}
+        {hasContainer && hasImage ? (
+          <img
+            src={imageUrl}
+            alt=""
+            draggable={false}
+            className="pointer-events-none absolute max-w-none select-none"
+            style={{
+              left: display.offsetX,
+              top: display.offsetY,
+              width: display.dispW,
+              height: display.dispH,
+            }}
+          />
+        ) : null}
 
-      {/* Dark scrim over the image to read everything outside the crop as
-          excluded. The crop frames sit above this. */}
-      {hasContainer && hasImage ? (
-        <div
-          className="pointer-events-none absolute bg-black/40"
-          style={{
-            left: display.offsetX,
-            top: display.offsetY,
-            width: display.dispW,
-            height: display.dispH,
-          }}
-        />
-      ) : null}
+        {/* Dark scrim so everything outside the crop reads as excluded. */}
+        {hasContainer && hasImage ? (
+          <div
+            className="pointer-events-none absolute bg-black/55"
+            style={{
+              left: display.offsetX,
+              top: display.offsetY,
+              width: display.dispW,
+              height: display.dispH,
+            }}
+          />
+        ) : null}
 
-      {/* Inactive keyframe frame: dashed, dimmed, tappable to activate. */}
-      {inactiveRect ? (
-        <button
-          type="button"
-          onClick={() => onKeyframeChange(inactiveKeyframe)}
-          className="absolute border-2 border-dashed border-muted-foreground/70 bg-transparent"
-          style={{
-            left: inactiveRect.left,
-            top: inactiveRect.top,
-            width: inactiveRect.width,
-            height: inactiveRect.height,
-          }}
-          aria-label={`Edit ${KEYFRAME_LABEL[inactiveKeyframe]} keyframe`}
-        >
-          <span className="absolute left-1 top-1 rounded bg-card/80 px-1.5 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur">
-            {KEYFRAME_LABEL[inactiveKeyframe]}
-          </span>
-        </button>
-      ) : null}
-
-      {/* Active keyframe frame: solid, bright, the Moveable target. */}
-      {activeRect ? (
-        <div
-          ref={activeFrameRef}
-          className="absolute border-2 border-primary"
-          style={{
-            left: activeRect.left,
-            top: activeRect.top,
-            width: activeRect.width,
-            height: activeRect.height,
-          }}
-        >
-          <span className="absolute left-1 top-1 rounded bg-primary px-1.5 py-0.5 text-xs font-medium text-primary-foreground">
-            {KEYFRAME_LABEL[activeKeyframe]}
-          </span>
-        </div>
-      ) : null}
-
-      {showMoveable ? (
-        <Moveable
-          target={activeFrameRef}
-          draggable
-          resizable
-          keepRatio
-          renderDirections={['nw', 'ne', 'sw', 'se']}
-          throttleDrag={0}
-          throttleResize={0}
-          origin={false}
-          bounds={bounds}
-          onDrag={handleDrag}
-          onDragEnd={handleDragEnd}
-          onResize={handleResize}
-          onResizeEnd={handleResizeEnd}
-        />
-      ) : null}
-
-      {/* Top overlay bar: keyframe toggle + Done. */}
-      <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 p-3">
-        <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card/80 backdrop-blur">
-          {(['start', 'end'] as const).map((kf) => (
-            <button
-              key={kf}
-              type="button"
-              onClick={() => onKeyframeChange(kf)}
-              className={cn(
-                'flex min-h-[44px] min-w-[64px] items-center justify-center px-4 text-sm font-medium transition-colors',
-                activeKeyframe === kf
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-foreground hover:bg-accent',
-              )}
-              aria-pressed={activeKeyframe === kf}
+        {/* Preview: a single bright camera box travelling start → end. */}
+        {isPreviewing && previewRect ? (
+          <>
+            <BrightCrop imageUrl={imageUrl} rect={previewRect} display={display} />
+            <div
+              className="pointer-events-none absolute rounded-sm border-2 border-primary"
+              style={{
+                left: previewRect.left,
+                top: previewRect.top,
+                width: previewRect.width,
+                height: previewRect.height,
+              }}
             >
-              {KEYFRAME_LABEL[kf]}
-            </button>
-          ))}
+              <span className="absolute left-1 top-1 rounded bg-primary px-1.5 py-0.5 text-xs font-medium text-primary-foreground">
+                Preview
+              </span>
+            </div>
+          </>
+        ) : null}
+
+        {/* Inactive keyframe frame: dashed, dimmed, tappable to activate. */}
+        {!isPreviewing && inactiveRect ? (
+          <button
+            type="button"
+            onClick={() => selectKeyframe(inactiveKeyframe)}
+            className="absolute rounded-sm border-2 border-dashed border-white/60 bg-transparent"
+            style={{
+              left: inactiveRect.left,
+              top: inactiveRect.top,
+              width: inactiveRect.width,
+              height: inactiveRect.height,
+            }}
+            aria-label={`Edit ${KEYFRAME_LABEL[inactiveKeyframe]} keyframe`}
+          >
+            <span className="absolute left-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-medium text-white/90">
+              {KEYFRAME_LABEL[inactiveKeyframe]}
+            </span>
+          </button>
+        ) : null}
+
+        {/* Active framed region, shown bright against the dimmed image. */}
+        {!isPreviewing && activeRect ? (
+          <BrightCrop imageUrl={imageUrl} rect={activeRect} display={display} />
+        ) : null}
+
+        {/* Active keyframe frame: solid, draggable, with corner resize handles. */}
+        {!isPreviewing && activeRect ? (
+          <div
+            className="absolute touch-none rounded-sm border-2 border-primary"
+            style={{
+              left: activeRect.left,
+              top: activeRect.top,
+              width: activeRect.width,
+              height: activeRect.height,
+              cursor: isGesturing ? 'grabbing' : 'grab',
+            }}
+            onPointerDown={(e) => beginGesture('move', null, e)}
+          >
+            <span className="pointer-events-none absolute left-1 top-1 rounded bg-primary px-1.5 py-0.5 text-xs font-medium text-primary-foreground">
+              {KEYFRAME_LABEL[activeKeyframe]}
+            </span>
+
+            {/* Thirds guides for framing. */}
+            <div className="pointer-events-none absolute inset-0">
+              <div className="absolute left-1/3 top-0 h-full w-px bg-white/25" />
+              <div className="absolute left-2/3 top-0 h-full w-px bg-white/25" />
+              <div className="absolute left-0 top-1/3 h-px w-full bg-white/25" />
+              <div className="absolute left-0 top-2/3 h-px w-full bg-white/25" />
+            </div>
+
+            {CORNERS.map(({ corner, className }) => (
+              <span
+                key={corner}
+                onPointerDown={(e) => beginGesture('resize', corner, e)}
+                className={cn(
+                  'absolute h-7 w-7 -translate-x-1/2 -translate-y-1/2 touch-none rounded-full border-2 border-primary bg-background shadow-md',
+                  className,
+                )}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        {/* Top overlay bar: keyframe toggle + Done. */}
+        <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 p-3">
+          <div className="flex items-center overflow-hidden rounded-lg border border-white/15 bg-black/60 backdrop-blur">
+            {(['start', 'end'] as const).map((kf) => (
+              <button
+                key={kf}
+                type="button"
+                onClick={() => selectKeyframe(kf)}
+                disabled={isPreviewing}
+                className={cn(
+                  'flex min-h-[44px] min-w-[64px] items-center justify-center px-4 text-sm font-medium transition-colors disabled:opacity-50',
+                  activeKeyframe === kf
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-white hover:bg-white/10',
+                )}
+                aria-pressed={activeKeyframe === kf}
+              >
+                {KEYFRAME_LABEL[kf]}
+              </button>
+            ))}
+          </div>
+
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            className="min-h-[44px] gap-2 border border-white/15 bg-black/60 text-white backdrop-blur hover:bg-black/70"
+          >
+            <X />
+            Done
+          </Button>
         </div>
 
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={onClose}
-          className="min-h-[44px] gap-2 border border-border bg-card/80 backdrop-blur"
-        >
-          <X />
-          Done
-        </Button>
+        {/* Bottom-of-stage hint. */}
+        {!isPreviewing ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2">
+            <span className="rounded-full bg-black/60 px-3 py-1 text-xs text-white/80 backdrop-blur">
+              Drag to pan · drag corners to zoom · editing{' '}
+              {KEYFRAME_LABEL[activeKeyframe]}
+            </span>
+          </div>
+        ) : null}
       </div>
+
+      {/* Controls panel. */}
+      <div className="shrink-0 border-t border-border bg-card px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
+        <div className="mx-auto flex max-w-xl flex-col gap-4">
+          {/* Preview + reset row. */}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              onClick={() => (isPreviewing ? stopPreview() : setIsPreviewing(true))}
+              className="h-11 flex-1 gap-2 rounded-xl text-base font-medium"
+            >
+              {isPreviewing ? <Pause className="size-5" /> : <Play className="size-5" />}
+              {isPreviewing ? 'Stop preview' : 'Preview motion'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={resetActiveKeyframe}
+              disabled={isPreviewing}
+              className="h-11 gap-2 rounded-xl"
+              aria-label={`Reset ${KEYFRAME_LABEL[activeKeyframe]} keyframe`}
+            >
+              <RotateCcw className="size-4" />
+              Reset
+            </Button>
+          </div>
+
+          {/* Speed (duration) + easing. */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">Speed (duration)</Label>
+                <span className="text-muted-foreground text-sm tabular-nums">
+                  {durationSec}s
+                </span>
+              </div>
+              <Slider
+                className="py-2"
+                min={1000}
+                max={30000}
+                step={100}
+                value={[durationMs]}
+                onValueChange={(v) => onDurationChange(v[0])}
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm">Easing</Label>
+              <Select
+                value={easingValue}
+                onValueChange={(name) =>
+                  onEasingChange({ type: 'preset', name: name as EasingPreset })
+                }
+              >
+                <SelectTrigger className="h-10 w-full rounded-xl">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EASING_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Motion-type presets. */}
+          <div className="flex flex-col gap-2">
+            <Label className="text-sm">Motion type</Label>
+            <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+              {MOTION_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => {
+                    stopPreview();
+                    onApplyPreset(preset);
+                  }}
+                  className="bg-muted text-foreground min-h-[40px] shrink-0 rounded-full px-4 text-sm font-medium transition-transform active:scale-95"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A full-brightness copy of the image, clipped to the crop rect, so the
+ *  framed region "lights up" against the dimmed surroundings. */
+function BrightCrop({
+  imageUrl,
+  rect,
+  display,
+}: {
+  imageUrl: string;
+  rect: FrameRect;
+  display: ImageDisplay;
+}): JSX.Element {
+  return (
+    <div
+      className="pointer-events-none absolute overflow-hidden"
+      style={{
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      }}
+    >
+      <img
+        src={imageUrl}
+        alt=""
+        draggable={false}
+        className="absolute max-w-none select-none"
+        style={{
+          left: display.offsetX - rect.left,
+          top: display.offsetY - rect.top,
+          width: display.dispW,
+          height: display.dispH,
+        }}
+      />
     </div>
   );
 }
