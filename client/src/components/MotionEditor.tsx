@@ -426,11 +426,11 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
     easing.type === 'preset' ? easing.name : 'linear';
 
   return (
-    <div className="absolute inset-0 flex flex-col bg-neutral-950 select-none">
+    <div className="fixed inset-0 z-50 flex flex-col bg-neutral-950 select-none">
       {/* Stage: the measured area where the image + crop frames live. */}
       <div
         ref={stageRef}
-        className="relative flex-1 overflow-hidden bg-black"
+        className="relative min-h-0 flex-1 overflow-hidden bg-black"
         style={{ touchAction: 'none' }}
       >
         {/* The full image, dimmed (the excluded area). */}
@@ -546,7 +546,7 @@ export function MotionEditor(props: MotionEditorProps): JSX.Element {
         ) : null}
 
         {/* Top overlay bar: keyframe toggle + Done. */}
-        <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 p-3">
+        <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-2 px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
           <div className="flex items-center overflow-hidden rounded-lg border border-white/15 bg-black/60 backdrop-blur">
             {(['start', 'end'] as const).map((kf) => (
               <button
