@@ -41,21 +41,36 @@ function stripRuntime(project: Project): Project {
   };
 }
 
+/** Backfill array fields that may be missing on records written by older
+ *  app versions, so the rest of the app can assume a well-formed shape. */
+function normalizeLoaded(project: Project): Project {
+  return {
+    ...project,
+    clips: Array.isArray(project.clips) ? project.clips : [],
+    audioTracks: Array.isArray(project.audioTracks) ? project.audioTracks : [],
+    transitions: Array.isArray(project.transitions) ? project.transitions : [],
+  };
+}
+
 export async function saveProject(project: Project): Promise<void> {
   await db.projects.put(stripRuntime(project));
 }
 
 export async function loadProject(id: string): Promise<Project | undefined> {
-  return db.projects.get(id);
+  const project = await db.projects.get(id);
+  return project ? normalizeLoaded(project) : undefined;
 }
 
 export async function listProjects(): Promise<Project[]> {
   const all = await db.projects.toArray();
-  return all.sort((a, b) => b.updatedAt - a.updatedAt);
+  return all
+    .map(normalizeLoaded)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  const project = await db.projects.get(id);
+  const stored = await db.projects.get(id);
+  const project = stored ? normalizeLoaded(stored) : undefined;
   await db.transaction('rw', db.projects, db.blobs, async () => {
     if (project) {
       const keys = [

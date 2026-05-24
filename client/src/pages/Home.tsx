@@ -108,8 +108,8 @@ export default function Home() {
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {projects.map((project, index) => {
-                const cover = project.clips[0]?.thumbnail;
-                const clipCount = project.clips.length;
+                const cover = project.clips?.[0]?.thumbnail;
+                const clipCount = project.clips?.length ?? 0;
                 return (
                   <motion.div
                     key={project.id}
