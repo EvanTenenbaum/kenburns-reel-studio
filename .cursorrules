@@ -1,0 +1,76 @@
+# Cursor Rules — Ken Burns Reel Studio
+
+## Read First
+- Read `AGENTS.md` for complete project context, architecture, and coding standards.
+- Read `TODO.md` for current task priorities.
+- Read `ARCHITECTURE.md` for deep technical design.
+
+## Quick Reference
+
+### Project Purpose
+Mobile-first web app for creating Instagram Reels from still images using Ken Burns motion effects, with timeline editing, transitions, and music.
+
+### Tech Stack
+React 19 + TypeScript (strict) + Vite 7 + Tailwind 4 + Zustand + zundo + Dexie.js + Mediabunny + Framer Motion + @use-gesture/react + dnd-kit + WaveSurfer.js
+
+### Critical Rules
+1. Engine code (`engine/`) must have ZERO React or DOM dependencies (except Canvas/WebCodecs/Worker APIs)
+2. Components access engine logic ONLY through hooks
+3. Pages access state ONLY through hooks (never import stores directly)
+4. All interactive elements must have 44×44px minimum touch targets
+5. Only animate `transform` and `opacity` — never layout properties
+6. TypeScript strict mode — no `any` types
+7. Use `@/` path alias for all imports (maps to `client/src/`)
+8. All user actions modifying project state must be undoable (zundo)
+9. Images stored as blobs in Dexie (IndexedDB), not as base64 strings
+10. Lazy-load heavy deps: Mediabunny (on export), ffmpeg.wasm (last resort), WaveSurfer (on audio add)
+
+### File Organization
+- `types/` — TypeScript interfaces (project, clip, kenburns, audio, export)
+- `engine/` — Pure computation (kenburns math, rendering, export pipeline, capabilities)
+- `store/` — Zustand state stores with zundo undo/redo
+- `hooks/` — Custom React hooks (bridge between store/engine and components)
+- `components/` — UI components (preview, timeline, controls, music)
+- `pages/` — Route-level page components
+- `lib/` — Utility functions (math, image helpers, formatting)
+- `constants/` — App constants (Instagram specs, presets, defaults)
+- `workers/` — Web Worker scripts (export rendering)
+
+### Output Specs (Default: Instagram Reels)
+- Resolution: 1080×1920 (9:16)
+- FPS: 30
+- Video codec: H.264 (AVC) via Mediabunny CanvasSource
+- Audio codec: AAC (with MP3 polyfill fallback for old Safari)
+- Container: MP4
+- Duration: 15–90 seconds
+- Also supports: 1:1, 4:5, 16:9 ratios
+
+### Key Data Types
+```typescript
+interface Viewport { x: number; y: number; zoom: number; } // Normalized 0-1
+interface KenBurnsConfig { startViewport: Viewport; endViewport: Viewport; easing: EasingConfig; preset?: MotionPreset; }
+interface Clip { id: string; imageBlobKey: string; duration: number; kenburns: KenBurnsConfig; order: number; }
+interface AudioTrack { id: string; blobKey: string; startTime: number; duration: number; volume: number; fadeIn: number; fadeOut: number; }
+```
+
+### Export Pipeline (Mediabunny)
+```typescript
+// Core pattern — Mediabunny handles WebCodecs internally
+const videoSource = new CanvasSource(canvas, { codec: 'avc', bitrate: QUALITY_HIGH });
+const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+output.addVideoTrack(videoSource, { frameRate: 30 });
+await output.start();
+// Render loop: renderFrame(ctx, project, time); await videoSource.add(t, dt);
+await output.finalize();
+const mp4 = new Blob([output.target.buffer!], { type: 'video/mp4' });
+```
+
+### Dependency Boundaries (ENFORCED)
+| Directory | May Import From | MUST NOT Import |
+|-----------|----------------|-----------------|
+| `engine/` | `types/`, `lib/`, `constants/` | React, DOM, store, hooks, components |
+| `store/` | `types/`, `engine/`, `lib/` | React components, DOM |
+| `hooks/` | `store/`, `engine/`, `types/`, `lib/` | Direct DOM manipulation |
+| `components/` | `hooks/`, `types/`, `lib/`, `@/components/ui/*` | Direct engine calls, direct store access |
+| `pages/` | `components/`, `hooks/` | Engine, store, lib directly |
+| `workers/` | `engine/`, `types/`, `lib/`, `constants/` | React, DOM, store, hooks |

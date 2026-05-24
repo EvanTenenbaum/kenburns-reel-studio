@@ -1,0 +1,12 @@
+# Default owner for everything
+* @owner
+
+# Engine code requires careful review (performance-critical, no React deps)
+client/src/engine/ @owner
+
+# Export pipeline (codec handling, memory management)
+client/src/workers/ @owner
+
+# Architecture decisions
+AGENTS.md @owner
+ARCHITECTURE.md @owner

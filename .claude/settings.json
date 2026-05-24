@@ -1,0 +1,15 @@
+{
+  "project_context": "Read AGENTS.md at the project root for complete context, architecture, data model, and coding standards. Read TODO.md for current task priorities.",
+  "rules": [
+    "Engine code (client/src/engine/) must have ZERO React or DOM dependencies",
+    "Components access engine/store only through hooks - never import stores directly",
+    "TypeScript strict mode - no any types",
+    "All interactive elements must have 44x44px minimum touch targets",
+    "Only animate transform and opacity - never layout properties",
+    "Use @/ path alias for all imports",
+    "All project-modifying actions must be undoable via zundo",
+    "Video export uses Mediabunny CanvasSource (NOT the deprecated mp4-muxer)",
+    "Lazy-load heavy deps: Mediabunny on export, ffmpeg.wasm as last resort, WaveSurfer on audio add",
+    "Follow conventional commits: feat(scope): description"
+  ]
+}
