@@ -32,6 +32,60 @@ class StudioDatabase extends Dexie {
 
 export const db = new StudioDatabase();
 
+/**
+ * True for errors that mean the on-device database was created by an older or
+ * foreign schema whose object-store key paths are incompatible with this build
+ * (e.g. a put failing with "key path did not yield a value"). IndexedDB cannot
+ * change a store's key path in place, so the only recovery is to recreate it.
+ */
+function isIncompatibleSchemaError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (
+    err.name === 'DataError' ||
+    err.name === 'ConstraintError' ||
+    /key path/i.test(err.message)
+  );
+}
+
+let recreating: Promise<void> | null = null;
+
+/** Drop and recreate the database with the schema this build declares. */
+async function recreateDatabase(): Promise<void> {
+  if (!recreating) {
+    recreating = (async () => {
+      try {
+        db.close();
+      } catch {
+        /* already closed */
+      }
+      await db.delete();
+      await db.open();
+    })();
+    try {
+      await recreating;
+    } finally {
+      recreating = null;
+    }
+    return;
+  }
+  await recreating;
+}
+
+/**
+ * Run a write, and if it fails because the existing database has an
+ * incompatible schema, recreate the database once and retry. Reads are
+ * unaffected (a wrong key path still allows reading), so only writes need this.
+ */
+async function withSchemaRecovery<T>(op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (err) {
+    if (!isIncompatibleSchemaError(err)) throw err;
+    await recreateDatabase();
+    return op();
+  }
+}
+
 /** Remove runtime-only blob URLs so persisted data stays valid across reloads. */
 function stripRuntime(project: Project): Project {
   return {
@@ -53,7 +107,7 @@ function normalizeLoaded(project: Project): Project {
 }
 
 export async function saveProject(project: Project): Promise<void> {
-  await db.projects.put(stripRuntime(project));
+  await withSchemaRecovery(() => db.projects.put(stripRuntime(project)));
 }
 
 export async function loadProject(id: string): Promise<Project | undefined> {
@@ -84,7 +138,7 @@ export async function deleteProject(id: string): Promise<void> {
 }
 
 export async function saveBlob(key: string, blob: Blob): Promise<void> {
-  await db.blobs.put({ key, blob });
+  await withSchemaRecovery(() => db.blobs.put({ key, blob }));
 }
 
 export async function loadBlob(key: string): Promise<Blob | undefined> {
