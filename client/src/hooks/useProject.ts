@@ -21,7 +21,7 @@ import {
 } from '@/store/db';
 import type { Project } from '@/types/project';
 import { computeTimelineLayout, computeTotalDuration } from '@/lib/timeline';
-import { readImageMeta, isSupportedImage } from '@/lib/image';
+import { prepareImageImport, isSupportedImage } from '@/lib/image';
 import { configFromPreset, getRandomPreset } from '@/constants/presets';
 import { DEFAULT_CLIP_DURATION_MS } from '@/constants/instagram';
 import { DEFAULT_AUDIO_FADE_MS, DEFAULT_AUDIO_VOLUME } from '@/constants/defaults';
@@ -125,21 +125,21 @@ export function useProject() {
       let added = 0;
       for (const file of list) {
         try {
+          const prepared = await prepareImageImport(file);
           const blobKey = nanoid();
-          await saveBlob(blobKey, file);
-          const meta = await readImageMeta(file);
+          await saveBlob(blobKey, prepared.blob);
           const preset = getRandomPreset();
           const clip: Clip = {
             id: nanoid(),
-            imageUrl: URL.createObjectURL(file),
+            imageUrl: URL.createObjectURL(prepared.blob),
             imageBlobKey: blobKey,
             startTime: 0,
             duration: DEFAULT_CLIP_DURATION_MS,
             kenburns: configFromPreset(preset),
             order: 0,
-            thumbnail: meta.thumbnail,
-            naturalWidth: meta.naturalWidth,
-            naturalHeight: meta.naturalHeight,
+            thumbnail: prepared.thumbnail,
+            naturalWidth: prepared.naturalWidth,
+            naturalHeight: prepared.naturalHeight,
           };
           addClip(clip);
           added += 1;
